@@ -89,6 +89,25 @@ int main(void) {
                 arg1[len - 1] = '\0';
             }
             nlp_interact(arg1);
+        } else if (strcmp(cmd, "init_kfs") == 0) {
+            init_kfs();
+        } else if (strcmp(cmd, "kfs_list") == 0) {
+            scanf("%[^\n]", arg1);
+            kfs_list_virtual_dir(arg1);
+        } else if (strcmp(cmd, "kfs_tags") == 0) {
+            int ino;
+            scanf("%d", &ino);
+            kfs_show_tags(ino);
+        } else if (strcmp(cmd, "init_io_opt") == 0) {
+            init_workload_analyzer();
+        } else if (strcmp(cmd, "io_stats") == 0) {
+            show_io_stats();
+        } else if (strcmp(cmd, "init_security") == 0) {
+            init_security_system();
+        } else if (strcmp(cmd, "user_profile") == 0) {
+            show_user_profile();
+        } else if (strcmp(cmd, "security_log") == 0) {
+            show_security_events();
         } else if (strcmp(cmd, "help") == 0) {
             printf("Available commands:\n");
             printf("  login - Login to the system\n");
@@ -111,7 +130,19 @@ int main(void) {
             printf("  nlp <text> - Natural language interaction\n");
             printf("  init_agent - Initialize agent directories\n");
             printf("  cleanup_memories - Clean up expired memories\n");
-            printf("  help - Show this help message\n");
+            printf("\n=== 创新功能 ===\n");
+            printf("  [KFS 智能文件分类]\n");
+            printf("    init_kfs - Initialize KFS system\n");
+            printf("    kfs_list <vdir> - List virtual directory\n");
+            printf("    kfs_tags <ino> - Show file tags\n");
+            printf("  [AI I/O 优化]\n");
+            printf("    init_io_opt - Initialize I/O optimizer\n");
+            printf("    io_stats - Show I/O statistics\n");
+            printf("  [安全异常检测]\n");
+            printf("    init_security - Initialize security system\n");
+            printf("    user_profile - Show user behavior profile\n");
+            printf("    security_log - Show security events\n");
+            printf("\n  help - Show this help message\n");
             printf("  exit - Exit the system\n");
             printf("\nNLP Examples:\n");
             printf("  nlp 记住这个重要的信息\n");

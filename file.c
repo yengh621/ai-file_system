@@ -69,6 +69,9 @@ void create(char *name) {
     iput(ip);
     iput(dip);
     printf("Create successful.\n");
+    
+    /* KFS 自动分类 */
+    kfs_classify_file(name, ino);
 }
 
 void delete(char *name) {
@@ -76,6 +79,12 @@ void delete(char *name) {
         printf("Not logged in.\n");
         return;
     }
+    
+    /* 安全异常检测 */
+    if (detect_anomaly("delete", name)) {
+        return;
+    }
+    
     struct inode *dip = iget(cur_dir);
     if (dip == NULL) {
         printf("Directory not found.\n");
@@ -273,6 +282,9 @@ int read(int fd, unsigned char *buf, int count) {
         total += len;
         offset += len;
         count -= len;
+        
+        /* 记录 I/O 请求用于自适应优化 */
+        record_io_request(ip->i_ino, lbn, 1);
     }
     f->f_offset = offset;
     printf("Read %d bytes.\n", total);

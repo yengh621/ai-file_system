@@ -167,6 +167,39 @@ void format(void) {
         }
     }
     
+    /* 创建 KFS 智能文件系统目录结构 */
+    struct inode *root_dir3 = iget(1);
+    if (root_dir3 != NULL) {
+        create_dir_in(root_dir3, "kfs", 0, 0, S_IFDIR | 0755);
+        iput(root_dir3);
+        
+        struct inode *kfs_dir = namei("/kfs");
+        if (kfs_dir != NULL) {
+            create_dir_in(kfs_dir, "type", 0, 0, S_IFDIR | 0755);
+            create_dir_in(kfs_dir, "time", 0, 0, S_IFDIR | 0755);
+            create_dir_in(kfs_dir, "project", 0, 0, S_IFDIR | 0755);
+            
+            struct inode *type_dir = namei("/kfs/type");
+            if (type_dir != NULL) {
+                create_dir_in(type_dir, "code", 0, 0, S_IFDIR | 0755);
+                create_dir_in(type_dir, "document", 0, 0, S_IFDIR | 0755);
+                create_dir_in(type_dir, "image", 0, 0, S_IFDIR | 0755);
+                create_dir_in(type_dir, "data", 0, 0, S_IFDIR | 0755);
+                iput(type_dir);
+            }
+            
+            struct inode *time_dir = namei("/kfs/time");
+            if (time_dir != NULL) {
+                create_dir_in(time_dir, "today", 0, 0, S_IFDIR | 0755);
+                create_dir_in(time_dir, "this_week", 0, 0, S_IFDIR | 0755);
+                create_dir_in(time_dir, "recent_30days", 0, 0, S_IFDIR | 0755);
+                iput(time_dir);
+            }
+            
+            iput(kfs_dir);
+        }
+    }
+    
     sb.ai_mount_flag = 1;
     printf("Format completed.\n");
 }
