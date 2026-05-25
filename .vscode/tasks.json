@@ -1,0 +1,46 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build All",
+      "type": "shell",
+      "command": "gcc",
+      "args": [
+        "-Wall",
+        "-Wextra",
+        "-o",
+        "filesystem.exe",
+        "main.c",
+        "disk.c",
+        "inode.c",
+        "block.c",
+        "directory.c",
+        "file.c",
+        "user.c",
+        "permission.c"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": ["$gcc"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "shell": {
+          "executable": "cmd.exe",
+          "args": ["/c"]
+        }
+      }
+    },
+    {
+      "label": "Clean",
+      "type": "shell",
+      "command": "cmd.exe",
+      "args": ["/c", "del", "filesystem.exe", "*.o", "vdisk.bin"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    }
+  ]
+}
+
