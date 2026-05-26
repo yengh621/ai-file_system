@@ -65,20 +65,6 @@ int main(void) {
         } else if (strcmp(cmd, "exit") == 0) {
             save_vdisk();
             break;
-        } else if (strcmp(cmd, "add_memory") == 0) {
-            char type[10];
-            scanf("%s %[^\n]", type, arg1);
-            char is_long = (strcmp(type, "long") == 0) ? 1 : 0;
-            add_memory(arg1, is_long);
-        } else if (strcmp(cmd, "list_memories") == 0) {
-            list_memories();
-        } else if (strcmp(cmd, "call_tool") == 0) {
-            scanf("%s %[^\n]", arg1, arg2);
-            call_ai_tool(arg1, arg2);
-        } else if (strcmp(cmd, "init_agent") == 0) {
-            init_agent_dirs();
-        } else if (strcmp(cmd, "cleanup_memories") == 0) {
-            cleanup_expired_memories();
         } else if (strcmp(cmd, "nlp") == 0) {
             /* 读取自然语言输入 */
             getchar(); /* 清除换行符 */
@@ -108,6 +94,14 @@ int main(void) {
             show_user_profile();
         } else if (strcmp(cmd, "security_log") == 0) {
             show_security_events();
+        } else if (strcmp(cmd, "init_integration") == 0) {
+            init_integration();
+        } else if (strcmp(cmd, "optimize") == 0) {
+            integration_apply_optimization();
+        } else if (strcmp(cmd, "suggestions") == 0) {
+            integration_show_suggestions();
+        } else if (strcmp(cmd, "analyze") == 0) {
+            integration_show_suggestions();
         } else if (strcmp(cmd, "help") == 0) {
             printf("Available commands:\n");
             printf("  login - Login to the system\n");
@@ -124,12 +118,7 @@ int main(void) {
             printf("  chmod <name> <mode> - Change file permissions\n");
             printf("  chdir <name> - Change current directory\n");
             printf("  dir - List directory contents\n");
-            printf("  add_memory <short/long> <content> - Add a memory\n");
-            printf("  list_memories - List all memories\n");
-            printf("  call_tool <tool> <args> - Call an AI tool\n");
             printf("  nlp <text> - Natural language interaction\n");
-            printf("  init_agent - Initialize agent directories\n");
-            printf("  cleanup_memories - Clean up expired memories\n");
             printf("\n=== 创新功能 ===\n");
             printf("  [KFS 智能文件分类]\n");
             printf("    init_kfs - Initialize KFS system\n");
@@ -142,12 +131,16 @@ int main(void) {
             printf("    init_security - Initialize security system\n");
             printf("    user_profile - Show user behavior profile\n");
             printf("    security_log - Show security events\n");
+            printf("\n=== 集成层：记忆优化 ===\n");
+            printf("  [记忆优化]\n");
+            printf("    init_integration - Initialize integration layer\n");
+            printf("    optimize - Apply optimization based on learning\n");
+            printf("    suggestions - Show optimization suggestions\n");
+            printf("  [行为分析]\n");
+            printf("    analyze - Trigger behavior analysis\n");
             printf("\n  help - Show this help message\n");
             printf("  exit - Exit the system\n");
             printf("\nNLP Examples:\n");
-            printf("  nlp 记住这个重要的信息\n");
-            printf("  nlp 查看记忆\n");
-            printf("  nlp 总结：这是一段很长的文本...\n");
             printf("  nlp 创建文件 test\n");
         } else {
             printf("Unknown command. Type 'help' for available commands.\n");

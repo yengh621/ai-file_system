@@ -1,0 +1,34 @@
+{
+  "glm": {
+    "api_key": "your_api_key_here",
+    "api_base_url": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+    "model_name": "glm-4",
+    "timeout": 30
+  },
+  "kfs": {
+    "max_tags": 16,
+    "default_tags": [
+      "code",
+      "document",
+      "image",
+      "data",
+      "other"
+    ]
+  },
+  "io_optimizer": {
+    "history_size": 64,
+    "default_prefetch_window": 3,
+    "sequential_prefetch_window": 10,
+    "random_prefetch_window": 0
+  },
+  "security": {
+    "default_delete_threshold": 5,
+    "default_modify_threshold": 10,
+    "log_max_size": 64,
+    "behavior_history_size": 128
+  },
+  "agent": {
+    "memory_expiry_hours": 24,
+    "enable_long_term_memory": true
+  }
+}

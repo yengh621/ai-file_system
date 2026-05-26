@@ -56,11 +56,7 @@
 #define W_OK 0x2
 #define X_OK 0x1
 
-/* AI 资源类型 */
-#define AI_RESOURCE_NORMAL 0
-#define AI_RESOURCE_MEMORY 1
-#define AI_RESOURCE_TOOL 2
-#define AI_RESOURCE_LOG 3
+
 
 struct filsys {
     unsigned short s_isize;
@@ -74,10 +70,6 @@ struct filsys {
     char s_fmod;
     char s_ronly;
     unsigned short s_time[2];
-    /* AI 扩展字段 */
-    unsigned short ai_context_blk_num;
-    char ai_mount_flag;
-    unsigned short ai_log_inode_no;
 };
 
 struct dinode {
@@ -89,10 +81,6 @@ struct dinode {
     unsigned short di_addr[NADDR];
     unsigned short di_atime[2];
     unsigned short di_mtime[2];
-    /* AI 扩展字段 */
-    char ai_resource_type;
-    unsigned long context_expire;
-    char audit_flag;
 };
 
 struct inode {
@@ -135,32 +123,6 @@ struct file_lock {
     int lock_type;           /* 锁类型：读或写 */
     int owner_uid;           /* 锁所有者 UID */
     int read_count;          /* 读锁计数 */
-};
-
-/* AI 记忆结构体 */
-struct ai_memory {
-    unsigned short ino;
-    int uid;
-    char content[256];
-    unsigned long timestamp;
-    char is_long_term;
-};
-
-/* AI 工具映射结构体 */
-struct ai_tool {
-    char name[DIRSIZ];
-    char script_path[64];
-    int uid;
-    char executable;
-};
-
-/* AI 审计日志结构体 */
-struct ai_audit_log {
-    int uid;
-    unsigned long timestamp;
-    char action[32];
-    char resource_path[64];
-    char result[32];
 };
 
 /* === 二、组织层创新：KFS 智能文件分类 === */
@@ -305,12 +267,6 @@ void unlock_file(unsigned short ino, int lock_type);
 void init_file_locks();
 
 /* AI 相关函数声明 */
-void init_agent_dirs();
-void add_memory(char *content, char is_long_term);
-void list_memories();
-void call_ai_tool(char *tool_name, char *args);
-void log_ai_action(char *action, char *resource_path, char *result);
-void cleanup_expired_memories();
 void nlp_interact(char *text);
 
 /* === 组织层创新：KFS 函数声明 === */
@@ -325,6 +281,7 @@ void record_io_request(unsigned short ino, int block_no, int is_read);
 void analyze_workload();
 int get_prefetch_window();
 void show_io_stats();
+void set_prefetch_window(int window);
 
 /* === 安全层创新：行为检测函数声明 === */
 void init_security_system();
@@ -332,5 +289,16 @@ void record_user_action(char *action, char *target);
 int detect_anomaly(char *action, char *target);
 void show_user_profile();
 void show_security_events();
+void set_security_thresholds(int delete_thresh, int modify_thresh);
+void set_delete_threshold(int threshold);
+void set_modify_threshold(int threshold);
+
+/* === 集成层：记忆优化集成 === */
+void init_integration();
+void integration_set_user(int uid);
+void integration_clear_user();
+void integration_record_operation(char *operation, char *path);
+void integration_apply_optimization();
+void integration_show_suggestions();
 
 #endif

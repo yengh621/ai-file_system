@@ -258,6 +258,8 @@ void login(void) {
                 }
             }
             printf("Login successful.\n");
+            /* 激活多智能体系统 */
+            integration_set_user(cur_uid);
             return;
         }
     }
@@ -269,6 +271,8 @@ void logout(void) {
         printf("Not logged in.\n");
         return;
     }
+    /* 停止多智能体系统 */
+    integration_clear_user();
     for (int i = 0; i < NOFILE; i++) {
         if (u_ofile[i] != -1) {
             struct file *f = &sysopenfile[u_ofile[i]];
