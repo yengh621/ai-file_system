@@ -1,5 +1,67 @@
 #include "filesystem.h"
 
+void print_block_status() {
+    int block_used[512] = {0};  // 512个块，0=空闲，1=占用
+    int blkno, i;
+
+    // 首先，超级块和inode块是被占用的
+    block_used[SUPERBLOCK] = 1;
+    for (i = 0; i < DINODEBLK; i++) {
+        block_used[DINODESTART + i] = 1;
+    }
+
+    // 扫描所有inode，找出被占用的块
+    for (i = 1; i <= DINODEBLK * (BLOCKSIZ / DINODESIZ); i++) {
+        struct dinode di;
+        iget_inode(i, &di);
+
+        if (di.di_mode == 0) continue;  // 空闲inode
+
+        // 直接块
+        for (int j = 0; j < 6; j++) {
+            if (di.di_addr[j] != 0 && di.di_addr[j] < 512) {
+                block_used[di.di_addr[j]] = 1;
+            }
+        }
+        // 一级间接块
+        if (di.di_addr[6] != 0 && di.di_addr[6] < 512) {
+            block_used[di.di_addr[6]] = 1;
+            bread(di.di_addr[6], block_buf);
+            for (int j = 0; j < 128; j++) {
+                int bn = ((unsigned short*)block_buf)[j];
+                if (bn != 0 && bn < 512) {
+                    block_used[bn] = 1;
+                }
+            }
+        }
+        // 二级间接块
+        if (di.di_addr[7] != 0 && di.di_addr[7] < 512) {
+            block_used[di.di_addr[7]] = 1;
+            bread(di.di_addr[7], block_buf);
+            for (int j = 0; j < 128; j++) {
+                int bn1 = ((unsigned short*)block_buf)[j];
+                if (bn1 != 0 && bn1 < 512) {
+                    block_used[bn1] = 1;
+                    bread(bn1, block_buf);
+                    for (int k = 0; k < 128; k++) {
+                        int bn2 = ((unsigned short*)block_buf)[k];
+                        if (bn2 != 0 && bn2 < 512) {
+                            block_used[bn2] = 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 输出块状态，格式 "BLOCK_STATUS:010101..."
+    printf("BLOCK_STATUS:");
+    for (i = 0; i < 512; i++) {
+        printf("%d", block_used[i]);
+    }
+    printf("\n");
+}
+
 int main(void) {
     int i;
     for (i = 0; i < NHINO; i++) inode[i] = NULL;
@@ -102,6 +164,8 @@ int main(void) {
             integration_show_suggestions();
         } else if (strcmp(cmd, "analyze") == 0) {
             integration_show_suggestions();
+        } else if (strcmp(cmd, "blocks") == 0) {
+            print_block_status();
         } else if (strcmp(cmd, "help") == 0) {
             printf("Available commands:\n");
             printf("  login - Login to the system\n");
@@ -118,6 +182,7 @@ int main(void) {
             printf("  chmod <name> <mode> - Change file permissions\n");
             printf("  chdir <name> - Change current directory\n");
             printf("  dir - List directory contents\n");
+            printf("  blocks - Show block usage status\n");
             printf("  nlp <text> - Natural language interaction\n");
             printf("\n=== 创新功能 ===\n");
             printf("  [KFS 智能文件分类]\n");

@@ -293,6 +293,9 @@ void set_security_thresholds(int delete_thresh, int modify_thresh);
 void set_delete_threshold(int threshold);
 void set_modify_threshold(int threshold);
 
+/* 获取块使用状态 */
+void print_block_status();
+
 /* === 集成层：记忆优化集成 === */
 void init_integration();
 void integration_set_user(int uid);
