@@ -17,14 +17,16 @@ from .agents.security_agent import SecurityAgent
 
 
 class AgentOrchestrator:
-    def __init__(self, memory_dir="debug_memory"):
+    def __init__(self, memory_dir="debug_memory", config: Dict = None):
+        self.memory_dir = memory_dir
         self.recorder = MemoryRecorder(memory_dir)
+        self.config = config or {}
         
         # 初始化各个 Agent
-        self.analyzer_agent = AnalyzerAgent()
-        self.kfs_agent = KFSAgent()
-        self.io_agent = IOAgent()
-        self.security_agent = SecurityAgent()
+        self.analyzer_agent = AnalyzerAgent(config=self.config)
+        self.kfs_agent = KFSAgent(config=self.config, memory_dir=memory_dir)
+        self.io_agent = IOAgent(config=self.config, memory_dir=memory_dir)
+        self.security_agent = SecurityAgent(config=self.config, memory_dir=memory_dir)
         
         # 最新分析结果文件
         self.last_analysis_file = os.path.join(memory_dir, "agent", "memory", "long_term", "last_analysis.json")
@@ -74,6 +76,10 @@ class AgentOrchestrator:
         print("\n🤖 [4/4] Security Agent - 安全分析...")
         security_result = self.security_agent.process(behavior_pattern, context)
         
+        # 保存学习参数
+        print("\n💾 更新学习参数...")
+        self._save_learned_params(uid, io_result, security_result, kfs_result)
+        
         # 保存最新分析结果
         print("\n💾 保存最新分析结果...")
         self._save_last_analysis(uid, behavior_pattern, io_result, security_result, kfs_result)
@@ -90,6 +96,24 @@ class AgentOrchestrator:
             "learned_params": learned_params
         }
     
+    def _save_learned_params(self, uid: int, io_result: Dict, security_result: Dict, kfs_result: Dict):
+        """保存学习参数到 learned_params.json"""
+        try:
+            # 收集所有智能体的参数
+            params_to_save = {
+                "suggested_prefetch_window": io_result.get("parameters", {}).get("prefetch_window", 3),
+                "suggested_delete_threshold": security_result.get("parameters", {}).get("delete_threshold", 5),
+                "suggested_modify_threshold": security_result.get("parameters", {}).get("modify_threshold", 10),
+                "auto_tagging_enabled": kfs_result.get("parameters", {}).get("auto_tagging_enabled", True),
+                "category_rules": kfs_result.get("parameters", {}).get("category_rules", [])
+            }
+            
+            # 保存到 recorder
+            self.recorder.save_learned_params(uid, params_to_save)
+            print(f"✅ 学习参数已更新: {params_to_save}")
+        except Exception as e:
+            print(f"❌ 保存学习参数失败: {e}")
+    
     def get_optimization_config(self) -> Dict:
         """获取当前优化配置"""
         if self.recorder.current_uid == -1:
@@ -103,7 +127,9 @@ class AgentOrchestrator:
             "status": "success",
             "prefetch_window": learned_params.get("suggested_prefetch_window", 3),
             "delete_threshold": learned_params.get("suggested_delete_threshold", 5),
-            "modify_threshold": learned_params.get("suggested_modify_threshold", 10)
+            "modify_threshold": learned_params.get("suggested_modify_threshold", 10),
+            "auto_tagging_enabled": learned_params.get("auto_tagging_enabled", True),
+            "category_rules": learned_params.get("category_rules", [])
         }
     
     def get_last_analysis(self) -> Dict:
@@ -131,7 +157,9 @@ class AgentOrchestrator:
             "parameters": {
                 "prefetch_window": io_result.get("parameters", {}).get("prefetch_window", 3),
                 "delete_threshold": security_result.get("parameters", {}).get("delete_threshold", 5),
-                "modify_threshold": security_result.get("parameters", {}).get("modify_threshold", 10)
+                "modify_threshold": security_result.get("parameters", {}).get("modify_threshold", 10),
+                "auto_tagging_enabled": kfs_result.get("parameters", {}).get("auto_tagging_enabled", True),
+                "category_rules": kfs_result.get("parameters", {}).get("category_rules", [])
             }
         }
         
