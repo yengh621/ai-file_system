@@ -150,6 +150,9 @@ void delete(char *name) {
             int dbn = bmap(ip, j);
             if (dbn != 0) bfree(dbn);
         }
+        ip->i_din.di_mode = 0;
+        ip->i_din.di_size = 0;
+        ip->i_flag |= 1; // 标记为脏数据
         ifree(ino);
     }
     iput(ip);

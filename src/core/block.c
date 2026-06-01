@@ -21,12 +21,8 @@ int ialloc(void) {
 void ifree(int ino) {
     if (sb.s_ninode < NICINOD) {
         sb.s_inode[sb.s_ninode++] = ino;
-    } else {
-        struct dinode di;
-        memset(&di, 0, sizeof(di));
-        iput_inode(ino, &di);
+        sb.s_fmod = 1;
     }
-    sb.s_fmod = 1;
 }
 
 int balloc(void) {
@@ -37,9 +33,14 @@ int balloc(void) {
         return blkno;
     } else if (sb.s_nfree == 1) {
         blkno = sb.s_free[0];
-        bread(blkno, block_buf);
-        memcpy(&sb.s_nfree, block_buf, sizeof(unsigned short));
-        memcpy(sb.s_free, block_buf + sizeof(unsigned short), NICFREE * sizeof(unsigned short));
+        if (blkno == 0) {
+            printf("Error: Out of disk space!\n");
+            return 0;
+        }
+        unsigned char local_buf[BLOCKSIZ];
+        bread(blkno, local_buf);
+        memcpy(&sb.s_nfree, local_buf, sizeof(unsigned short));
+        memcpy(sb.s_free, local_buf + sizeof(unsigned short), NICFREE * sizeof(unsigned short));
         sb.s_fmod = 1;
         return blkno;
     }
@@ -50,9 +51,11 @@ void bfree(int blkno) {
     if (sb.s_nfree < NICFREE) {
         sb.s_free[sb.s_nfree++] = blkno;
     } else {
-        memcpy(block_buf, &sb.s_nfree, sizeof(unsigned short));
-        memcpy(block_buf + sizeof(unsigned short), sb.s_free, NICFREE * sizeof(unsigned short));
-        bwrite(blkno, block_buf);
+        unsigned char local_buf[BLOCKSIZ];
+        memset(local_buf, 0, BLOCKSIZ);
+        memcpy(local_buf, &sb.s_nfree, sizeof(unsigned short));
+        memcpy(local_buf + sizeof(unsigned short), sb.s_free, NICFREE * sizeof(unsigned short));
+        bwrite(blkno, local_buf);
         sb.s_nfree = 1;
         sb.s_free[0] = blkno;
     }
@@ -72,52 +75,57 @@ int bmap(struct inode *ip, int lbn) {
             }
         }
         return bn;
-    } else if (lbn < 6 + 128) {
+    } else if (lbn < 6 + 256) {
+        unsigned char indirect_buf[BLOCKSIZ];
         if (addr[6] == 0) {
             addr[6] = balloc();
             if (addr[6] == 0) return 0;
-            memset(block_buf, 0, BLOCKSIZ);
-            bwrite(addr[6], block_buf);
+            memset(indirect_buf, 0, BLOCKSIZ);
+            bwrite(addr[6], indirect_buf);
             ip->i_flag |= 1;
         }
-        bread(addr[6], block_buf);
-        bn = ((unsigned short*)block_buf)[lbn - 6];
+        bread(addr[6], indirect_buf);
+        bn = ((unsigned short*)indirect_buf)[lbn - 6];
         if (bn == 0) {
             bn = balloc();
             if (bn != 0) {
-                ((unsigned short*)block_buf)[lbn - 6] = bn;
-                bwrite(addr[6], block_buf);
+                ((unsigned short*)indirect_buf)[lbn - 6] = bn;
+                bwrite(addr[6], indirect_buf);
                 ip->i_flag |= 1;
             }
         }
         return bn;
-    } else if (lbn < 6 + 128 + 128*128) {
-        int idx1 = (lbn - 6 - 128) / 128;
-        int idx2 = (lbn - 6 - 128) % 128;
+    } else if (lbn < 6 + 256 + 256*256) {
+        unsigned char buf1[BLOCKSIZ];
+        unsigned char buf2[BLOCKSIZ];
+        int idx1 = (lbn - 6 - 256) / 256;
+        int idx2 = (lbn - 6 - 256) % 256;
         if (addr[7] == 0) {
             addr[7] = balloc();
             if (addr[7] == 0) return 0;
-            memset(block_buf, 0, BLOCKSIZ);
-            bwrite(addr[7], block_buf);
+            memset(buf1, 0, BLOCKSIZ);
+            bwrite(addr[7], buf1);
             ip->i_flag |= 1;
         }
-        bread(addr[7], block_buf);
-        bn = ((unsigned short*)block_buf)[idx1];
+        bread(addr[7], buf1);
+        bn = ((unsigned short*)buf1)[idx1];
         if (bn == 0) {
             bn = balloc();
             if (bn == 0) return 0;
-            ((unsigned short*)block_buf)[idx1] = bn;
-            memset(block_buf, 0, BLOCKSIZ);
-            bwrite(bn, block_buf);
+            ((unsigned short*)buf1)[idx1] = bn;
+            memset(buf2, 0, BLOCKSIZ);
+            bwrite(bn, buf2);
+            bwrite(addr[7], buf1);
             ip->i_flag |= 1;
         }
-        bread(bn, block_buf);
-        bn = ((unsigned short*)block_buf)[idx2];
+        int blk2 = bn;
+        bread(blk2, buf2);
+        bn = ((unsigned short*)buf2)[idx2];
         if (bn == 0) {
             bn = balloc();
             if (bn != 0) {
-                ((unsigned short*)block_buf)[idx2] = bn;
-                bwrite(addr[7], block_buf);
+                ((unsigned short*)buf2)[idx2] = bn;
+                bwrite(blk2, buf2);
                 ip->i_flag |= 1;
             }
         }
