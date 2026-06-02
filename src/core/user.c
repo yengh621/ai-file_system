@@ -48,19 +48,21 @@ static void create_dir_in(struct inode *parent, char *name, int uid, int gid, in
     bwrite(bn, block_buf);
     
     if (slot == -1) slot = (filesize + 15) / 16;
-    bn = bmap(parent, slot / 32);
-    if (bn == 0) {
+    int parent_bn = bmap(parent, slot / 32);
+    if (parent_bn == 0) {
+        // 修复：父目录无法扩展时，回收已分配的数据块
+        bfree(ip->i_din.di_addr[0]);   // 释放刚分配给新目录的块
         iput(ip);
         ifree(ino);
         return;
     }
     
-    bread(bn, block_buf);
+    bread(parent_bn, block_buf);
     dirp = (struct direct*)(block_buf + (slot % 32) * 16);
     strncpy(dirp->d_name, name, DIRSIZ - 1);
     dirp->d_name[DIRSIZ - 1] = '\0';
     dirp->d_ino = ino;
-    bwrite(bn, block_buf);
+    bwrite(parent_bn, block_buf);
     
     if ((slot + 1) * 16 > filesize) {
         parent->i_din.di_size = (slot + 1) * 16;
@@ -273,11 +275,16 @@ void logout(void) {
         printf("Not logged in.\n");
         return;
     }
-    /* 停止多智能体系统 */
+
     integration_clear_user();
     for (int i = 0; i < NOFILE; i++) {
         if (u_ofile[i] != -1) {
             struct file *f = &sysopenfile[u_ofile[i]];
+            
+            // 修复：根据打开模式释放对应锁
+            int lock_type = (f->f_flag == O_RDONLY) ? LOCK_READ : LOCK_WRITE;
+            unlock_file(f->f_inode->i_ino, lock_type);
+            
             f->f_count--;
             if (f->f_count == 0) {
                 iput(f->f_inode);
@@ -346,6 +353,7 @@ void mkdir(char *name) {
     if (slot == -1) slot = (filesize + 15) / 16;
     bn = bmap(dip, slot / 32);
     if (bn == 0) {
+        bfree(ip->i_din.di_addr[0]);
         iput(ip);
         ifree(ino);
         iput(dip);
