@@ -150,7 +150,7 @@ int check_permission(struct inode *ip, int mode) {
         if (mode & X_OK) granted |= (ip->i_din.di_mode & S_IXUSR) ? X_OK : 0;
     }
     /* 检查组权限 */
-    else if (ip->i_din.di_gid == 100) { /* 假设所有用户都是组100 */
+    else if (ip->i_din.di_gid == get_current_user_gid()) {
         if (mode & R_OK) granted |= (ip->i_din.di_mode & S_IRGRP) ? R_OK : 0;
         if (mode & W_OK) granted |= (ip->i_din.di_mode & S_IWGRP) ? W_OK : 0;
         if (mode & X_OK) granted |= (ip->i_din.di_mode & S_IXGRP) ? X_OK : 0;
@@ -166,6 +166,48 @@ int check_permission(struct inode *ip, int mode) {
 }
 
 /* 检查是否是目录 */
+void grant(char *path, char *username, int writable) {
+    if (cur_uid != 0) {
+        printf("Permission denied. Only root can grant file access.\n");
+        return;
+    }
+
+    int user_idx = find_user_index_by_name(username);
+    if (user_idx < 0) {
+        printf("Target user not found.\n");
+        return;
+    }
+
+    struct inode *ip = namei(path);
+    if (ip == NULL) {
+        printf("File not found.\n");
+        return;
+    }
+
+    if (is_directory(ip)) {
+        printf("Cannot grant a directory.\n");
+        iput(ip);
+        return;
+    }
+
+    char *base = strrchr(path, '/');
+    char *filename = base ? base + 1 : path;
+    char target_path[128];
+    snprintf(target_path, sizeof(target_path), "/usr/%s/%s", username, filename);
+
+    ip->i_din.di_gid = user[user_idx].u_gid;
+    ip->i_din.di_mode = (ip->i_din.di_mode & S_IFMT) | (ip->i_din.di_mode & 0700) | (writable ? 0060 : 0040);
+    ip->i_flag = 1;
+    iput(ip);
+
+    if (link(path, target_path) != 0) {
+        printf("Grant failed while linking target path.\n");
+        return;
+    }
+
+    printf("Grant successful: %s -> %s (%s)\n", path, target_path, writable ? "read/write" : "read-only");
+}
+
 int is_directory(struct inode *ip) {
     if (ip == NULL) return 0;
     return (ip->i_din.di_mode & S_IFMT) == S_IFDIR;

@@ -45,7 +45,7 @@ void create(char *name) {
     struct inode *ip = iget(ino);
     ip->i_din.di_mode = S_IFREG | 0644;
     ip->i_din.di_uid = cur_uid;
-    ip->i_din.di_gid = 100;
+    ip->i_din.di_gid = get_current_user_gid();
     ip->i_din.di_nlink = 1;
     ip->i_din.di_size = 0;
     memset(ip->i_din.di_addr, 0, sizeof(ip->i_din.di_addr));
@@ -334,6 +334,7 @@ int write(int fd, unsigned char *buf, int count) {
         bread(bn, block_buf);
         memcpy(block_buf + (offset % BLOCKSIZ), buf + total, len);
         bwrite(bn, block_buf);
+        record_io_request(ip->i_ino, lbn, 0);
         total += len;
         offset += len;
         count -= len;

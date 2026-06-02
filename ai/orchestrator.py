@@ -34,6 +34,7 @@ class AgentOrchestrator:
         self.memory_dir = memory_dir
         self.recorder = MemoryRecorder(memory_dir)
         self.config = config or load_config()
+        self.security_alert_file = os.path.join(self.memory_dir, "security_alerts.json")
         
         # 调用记录文件
         self.call_log_file = self.recorder.agent_calls_file
@@ -126,6 +127,37 @@ class AgentOrchestrator:
             "call_logs": self.get_call_logs(4),
             "agent_parameters": self.get_agent_parameters()
         }
+
+    def run_security_check(self) -> Dict:
+        context_result = self.recorder.get_context()
+        if context_result.get("status") != "success":
+            return context_result
+
+        context = context_result
+        uid = context.get("uid", -1)
+        analyzer_result = self.analyzer_agent.process(context)
+        behavior_pattern = analyzer_result.get("behavior_pattern", "")
+        self._log_agent_call("Analyzer", {"context": context, "security_check": True}, analyzer_result)
+
+        security_result = self.security_agent.process(behavior_pattern, context)
+        self._log_agent_call(
+            "Security",
+            {"guidance": behavior_pattern, "context": context, "security_check": True},
+            security_result,
+        )
+
+        alert_entry = self._build_security_alert(uid, behavior_pattern, context, security_result)
+        if alert_entry is not None:
+            self._append_security_alert(alert_entry)
+
+        return {
+            "status": "success",
+            "uid": uid,
+            "analyzer_result": analyzer_result,
+            "security_result": security_result,
+            "alert_written": alert_entry is not None,
+            "alert_entry": alert_entry,
+        }
     
     def _save_full_analysis(self, uid: int, behavior_pattern: str, io_result: Dict, security_result: Dict, kfs_result: Dict):
         """保存完整分析结果到 learned_params.json"""
@@ -154,6 +186,58 @@ class AgentOrchestrator:
         except Exception as e:
             print(f"❌ 保存分析结果失败: {e}")
     
+    def _build_security_alert(self, uid: int, behavior_pattern: str, context: Dict, security_result: Dict):
+        recent_stats = context.get("recent_stats", {})
+        operation_counts = recent_stats.get("operation_counts", {})
+        delete_count = int(operation_counts.get("delete", 0))
+        modify_count = (
+            int(operation_counts.get("write", 0))
+            + int(operation_counts.get("chmod", 0))
+            + int(operation_counts.get("create", 0))
+        )
+
+        params = security_result.get("parameters", {})
+        delete_threshold = int(params.get("delete_threshold", 5))
+        modify_threshold = int(params.get("modify_threshold", 10))
+
+        reasons = []
+        if delete_count >= delete_threshold:
+            reasons.append(f"delete count {delete_count} reached threshold {delete_threshold}")
+        if modify_count >= modify_threshold:
+            reasons.append(f"modify count {modify_count} reached threshold {modify_threshold}")
+
+        if not reasons:
+            return None
+
+        return {
+            "uid": uid,
+            "timestamp": datetime.now().isoformat(),
+            "behavior_pattern": behavior_pattern,
+            "security_suggestion": security_result.get("suggestion", ""),
+            "delete_count": delete_count,
+            "modify_count": modify_count,
+            "delete_threshold": delete_threshold,
+            "modify_threshold": modify_threshold,
+            "reasons": reasons,
+            "recent_stats": recent_stats,
+        }
+
+    def _append_security_alert(self, alert_entry: Dict):
+        alerts = []
+        if os.path.exists(self.security_alert_file):
+            try:
+                with open(self.security_alert_file, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, list):
+                    alerts = loaded
+            except Exception:
+                alerts = []
+
+        alerts.append(alert_entry)
+        os.makedirs(os.path.dirname(self.security_alert_file), exist_ok=True)
+        with open(self.security_alert_file, "w", encoding="utf-8") as f:
+            json.dump(alerts[-100:], f, ensure_ascii=False, indent=2)
+
     def get_optimization_config(self) -> Dict:
         """获取当前优化配置"""
         if self.recorder.current_uid == -1:

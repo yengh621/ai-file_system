@@ -172,6 +172,7 @@ void init_workload_analyzer() {
     printf("=== AI 自适应 I/O 优化初始化完成 (Per-File) ===\n");
     printf("现在每个文件有独立的 IO 历史和预取窗口\n");
     workload_initialized = 1;
+    export_io_stats_to_ai();
 }
 
 /* 记录 IO 请求（按文件） */
@@ -218,6 +219,7 @@ void record_io_request(unsigned short ino, int block_no, int is_read) {
     if (total < 5) {
         fh->current_type = WORKLOAD_UNKNOWN;
         fh->prefetch_window = ai_window;
+        export_io_stats_to_ai();
         return;
     }
     

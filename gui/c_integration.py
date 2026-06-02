@@ -133,9 +133,17 @@ class CSystemWrapper:
 class CSystemClient:
     """Small command-oriented client used by the GUI."""
 
+    BLOCK_COUNT = 512
+    INODE_SIZE = 32
+    INODE_COUNT = 32 * (512 // 32)
+
     def __init__(self):
         self.wrapper = CSystemWrapper()
         self.is_logged_in = False
+        self.last_storage_status = {
+            "blocks": [False] * self.BLOCK_COUNT,
+            "inodes": [False] * self.INODE_COUNT,
+        }
 
     def start_system(self):
         """Start the backend process."""
@@ -181,14 +189,40 @@ class CSystemClient:
 
     def get_block_status(self):
         """Return a 512-entry boolean block usage list."""
-        output = self.execute("blocks")
-        marker = "BLOCK_STATUS:"
+        return self.get_storage_status()["blocks"]
+
+    def get_storage_status(self):
+        """Return block and inode usage parsed from the backend blocks command."""
+        output = self.wrapper.send_command("blocks")
+        if output is not True:
+            return self.last_storage_status.copy()
+
+        output = self.wrapper.get_output_until_prompt(timeout=2.0)
+        blocks = self._parse_usage_bits(output, "BLOCK_STATUS:", self.BLOCK_COUNT)
+        inodes = self._parse_usage_bits(output, "INODE_STATUS:", self.INODE_COUNT)
+
+        if "BLOCK_STATUS:" not in output:
+            blocks = self.last_storage_status["blocks"][:]
+        if "INODE_STATUS:" not in output:
+            inodes = self.last_storage_status["inodes"][:]
+
+        self.last_storage_status = {
+            "blocks": blocks[:],
+            "inodes": inodes[:],
+        }
+        return {
+            "blocks": blocks,
+            "inodes": inodes,
+        }
+
+    def _parse_usage_bits(self, output, marker, expected_count):
+        """Parse a fixed-width 0/1 status line from backend output."""
         if marker in output:
             raw_status = output.split(marker, 1)[1]
-            status = "".join(ch for ch in raw_status if ch in "01")[:512]
-            blocks = [ch == "1" for ch in status]
-            return blocks + [False] * (512 - len(blocks))
-        return [False] * 512
+            status = "".join(ch for ch in raw_status if ch in "01")[:expected_count]
+            bits = [ch == "1" for ch in status]
+            return bits + [False] * (expected_count - len(bits))
+        return [False] * expected_count
 
     def nlp(self, text):
         """Send natural-language input to the backend."""

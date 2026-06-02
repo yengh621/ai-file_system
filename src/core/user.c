@@ -4,6 +4,24 @@ struct user user[USERNUM];
 int cur_uid = -1;
 unsigned short cur_dir = 1;
 
+int find_user_index_by_name(char *name) {
+    for (int i = 0; i < USERNUM; i++) {
+        if (strcmp(user[i].u_name, name) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+int get_current_user_gid(void) {
+    for (int i = 0; i < USERNUM; i++) {
+        if (user[i].u_uid == cur_uid) {
+            return user[i].u_gid;
+        }
+    }
+    return 100;
+}
+
 /* 辅助函数：在指定目录中创建新目录 */
 static void create_dir_in(struct inode *parent, char *name, int uid, int gid, int mode) {
     unsigned long filesize = parent->i_din.di_size;
@@ -130,7 +148,7 @@ void format(void) {
         sprintf(user[i].u_name, "usr%d", i);
         strcpy(user[i].u_passwd, "123456");
         user[i].u_uid = 99 + i;
-        user[i].u_gid = 100;
+        user[i].u_gid = 99 + i;
     }
     
     /* 创建 usr 目录 */
@@ -223,7 +241,7 @@ void load_vdisk(void) {
         sprintf(user[i].u_name, "usr%d", i);
         strcpy(user[i].u_passwd, "123456");
         user[i].u_uid = 99 + i;
-        user[i].u_gid = 100;
+        user[i].u_gid = 99 + i;
     }
 }
 
@@ -338,7 +356,7 @@ void mkdir(char *name) {
     struct inode *ip = iget(ino);
     ip->i_din.di_mode = S_IFDIR | 0755;
     ip->i_din.di_uid = cur_uid;
-    ip->i_din.di_gid = 100;
+    ip->i_din.di_gid = get_current_user_gid();
     ip->i_din.di_nlink = 2;
     ip->i_din.di_size = 32;
     int bn = balloc();

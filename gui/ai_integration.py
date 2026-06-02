@@ -91,6 +91,51 @@ class AIIntegration:
             print(f"[AI Integration] 读取调用记录失败: {e}")
         return []
 
+    def get_last_analysis(self):
+        """Return the last saved analysis for the active user."""
+        try:
+            path = self.recorder.learned_params_file
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+        except Exception as e:
+            print(f"[AI Integration] failed to read last analysis: {e}")
+        return None
+
+    def run_security_check(self):
+        """Run the periodic security check for the active user."""
+        if self.current_uid == -1:
+            return {"status": "error", "message": "please login first"}
+
+        if not self.orchestrator:
+            self.orchestrator = AgentOrchestrator()
+
+        self.orchestrator.set_user(self.current_uid)
+        return self.orchestrator.run_security_check()
+
+    def get_security_alerts(self):
+        """Read the shared security alert file."""
+        path = os.path.join(self.recorder.memory_dir, "security_alerts.json")
+        if not os.path.exists(path):
+            return []
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except Exception as e:
+            print(f"[AI Integration] failed to read security alerts: {e}")
+            return []
+
+    def clear_security_alerts(self):
+        """Clear the shared security alert file after root has viewed it."""
+        path = os.path.join(self.recorder.memory_dir, "security_alerts.json")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump([], f, ensure_ascii=False, indent=2)
+
 
 def get_used_space():
     """获取已用空间（估算）"""

@@ -120,6 +120,9 @@ class SpaceUsageWidget:
         self.percent_label = create_label(self.top_frame, "0%", font=Fonts.TITLE, fg=Colors.ACCENT)
         self.percent_label.pack(side=tk.RIGHT)
 
+        self.meta_label = create_label(self.frame, "Metadata: 0 inodes / 0 B", font=Fonts.SMALL, fg=Colors.FG_MUTED)
+        self.meta_label.pack(anchor="w", pady=(0, 8))
+
         # 图例
         self.legend_frame = create_frame(self.frame)
         self.legend_frame.pack(fill=tk.X, pady=(0, 10))
@@ -201,15 +204,24 @@ class SpaceUsageWidget:
                 tags=f"block{i}"
             )
 
-    def update(self, used_bytes, total_bytes):
+    def update(self, used_bytes, total_bytes, used_inodes=0, inode_bytes=0):
         """更新显示"""
         used_percent = (used_bytes / total_bytes) * 100
 
-        self.used_val.config(text=f"{used_bytes // 1024} KB")
-        self.total_val.config(text=f"{total_bytes // 1024} KB")
-        self.percent_label.config(text=f"{used_percent:.1f}%")
+        self.used_val.config(text=self._format_size(used_bytes))
+        self.total_val.config(text=self._format_size(total_bytes))
+        self.percent_label.config(text=f"{used_percent:.2f}%")
+        self.meta_label.config(text=f"Metadata: {used_inodes} inodes / {inode_bytes} B")
 
         self.draw_blocks()
+
+    def _format_size(self, size_bytes):
+        """Format byte sizes without hiding small changes."""
+        if size_bytes < 1024:
+            return f"{size_bytes} B"
+        if size_bytes < 1024 * 1024:
+            return f"{size_bytes / 1024:.1f} KB"
+        return f"{size_bytes / (1024 * 1024):.2f} MB"
 
 
 class LogWidget:
@@ -338,6 +350,9 @@ class AgentPanel:
         self.kfs_rules_label = create_label(self.kfs_frame, "分类规则: []", font=Fonts.NORMAL, fg=Colors.FG_MUTED)
         self.kfs_rules_label.pack(anchor="w", padx=8)
     
+        self.kfs_hot_label = create_label(self.kfs_frame, "Hot files: []", font=Fonts.SMALL, fg=Colors.FG_DIM)
+        self.kfs_hot_label.pack(anchor="w", padx=8)
+
     def update_parameters(self, params):
         """更新参数显示"""
         # IO Agent 参数
@@ -370,14 +385,52 @@ class AgentPanel:
             self.kfs_rules_label.config(text=f"分类规则: {rules_str}")
 
 
+    def update_parameters(self, params):
+        """Update the panel with actual agent parameters."""
+        if "prefetch_window" in params:
+            self.io_param_label.config(text=f"预取窗口: {params['prefetch_window']}")
+            self.io_desc_label.config(text=f"Actual windows: {params['prefetch_window']}")
+        elif "file_prefetch_windows" in params:
+            windows = params["file_prefetch_windows"]
+            if isinstance(windows, dict) and windows:
+                avg_window = sum(windows.values()) // len(windows)
+                self.io_param_label.config(text=f"预取窗口: {avg_window} (per-file)")
+                pairs = [f"{key}:{value}" for key, value in list(windows.items())[:6]]
+                self.io_desc_label.config(text=f"Actual windows: {', '.join(pairs)}")
+            else:
+                self.io_param_label.config(text="预取窗口: 3 (default)")
+                self.io_desc_label.config(text="Actual windows: {}")
+
+        if "delete_threshold" in params:
+            self.security_delete_label.config(text=f"删除阈值: {params['delete_threshold']}")
+        if "modify_threshold" in params:
+            self.security_modify_label.config(text=f"修改阈值: {params['modify_threshold']}")
+
+        if "auto_tagging_enabled" in params:
+            status = "启用" if params["auto_tagging_enabled"] else "禁用"
+            self.kfs_tag_label.config(text=f"自动标签: {status}")
+
+        if "category_rules" in params:
+            rules_str = str(params["category_rules"])[:50] + "..." if len(str(params["category_rules"])) > 50 else str(params["category_rules"])
+            self.kfs_rules_label.config(text=f"分类规则: {rules_str}")
+
+        if "hot_files" in params:
+            hot_preview = ", ".join(str(item) for item in params["hot_files"][:4]) if params["hot_files"] else "[]"
+            self.kfs_hot_label.config(text=f"Hot files: {hot_preview}")
+        else:
+            self.kfs_hot_label.config(text="Hot files: []")
+
+
 class FileTreeWidget:
     """科技风格文件树组件"""
 
-    def __init__(self, parent, on_file_select=None, on_context_menu=None, on_file_double_click=None):
+    def __init__(self, parent, on_file_select=None, on_context_menu=None, on_file_double_click=None, on_dir_double_click=None):
         self.on_file_select = on_file_select
         self.on_context_menu = on_context_menu
         self.on_file_double_click = on_file_double_click
+        self.on_dir_double_click = on_dir_double_click
         self.item_meta = {}
+        self.current_path = "/"
         self.frame = tk.LabelFrame(
             parent,
             text=" 📁 目录结构  ",
@@ -412,7 +465,7 @@ class FileTreeWidget:
         
         # 初始化根节点
         self.root_node = self.tree.insert("", "end", text="/", open=True)
-        self.item_meta[self.root_node] = {"name": "/", "type": "dir"}
+        self.item_meta[self.root_node] = {"name": "/", "type": "dir", "path": "/"}
         
         # 添加滚动条
         scrollbar = tk.Scrollbar(self.tree, orient="vertical", command=self.tree.yview)
@@ -446,15 +499,24 @@ class FileTreeWidget:
         meta = self.item_meta.get(item_id, {})
         if meta.get("type") == "file" and self.on_file_double_click:
             self.on_file_double_click(meta.get("name", ""))
+        elif meta.get("type") == "dir" and self.on_dir_double_click:
+            self.on_dir_double_click(meta)
 
-    def update_tree(self, dir_output):
+    def update_tree(self, dir_output, current_path="/", allow_parent=False):
         """根据目录输出更新树"""
         print(f"[DEBUG] 目录输出: {repr(dir_output)}")
-        self.item_meta = {self.root_node: {"name": "/", "type": "dir"}}
+        self.current_path = current_path or "/"
+        self.tree.item(self.root_node, text=self.current_path, open=True)
+        self.item_meta = {self.root_node: {"name": self.current_path, "type": "dir", "path": self.current_path}}
         
         # 清空现有树
         for child in self.tree.get_children(self.root_node):
             self.tree.delete(child)
+
+        if allow_parent and self.current_path != "/":
+            parent_path = self.current_path.rsplit("/", 1)[0] or "/"
+            item_id = self.tree.insert(self.root_node, "end", text="..")
+            self.item_meta[item_id] = {"name": "..", "type": "dir", "path": parent_path, "is_parent": True}
         
         # 解析目录输出
         lines = dir_output.strip().split('\n')
@@ -505,7 +567,8 @@ class FileTreeWidget:
                     
                     # 添加到树
                     item_id = self.tree.insert(self.root_node, "end", text=display_name)
-                    self.item_meta[item_id] = {"name": name, "type": item_type}
+                    item_path = self.current_path.rstrip("/") + "/" + name if self.current_path != "/" else "/" + name
+                    self.item_meta[item_id] = {"name": name, "type": item_type, "path": item_path}
 
     def clear(self):
         """清空树"""

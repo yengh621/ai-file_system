@@ -65,6 +65,7 @@ void print_block_status() {
 
 void print_block_status() {
     int block_used[FILEBLK] = {0};
+    int inode_used[DINODEBLK * (BLOCKSIZ / DINODESIZ)] = {0};
     int i;
 
     for (i = 1; i <= DINODEBLK * (BLOCKSIZ / DINODESIZ); i++) {
@@ -72,6 +73,7 @@ void print_block_status() {
         iget_inode(i, &di);
 
         if (di.di_mode == 0) continue;
+        inode_used[i - 1] = 1;
 
         for (int j = 0; j < 6; j++) {
             mark_data_block(di.di_addr[j], block_used);
@@ -104,6 +106,12 @@ void print_block_status() {
     printf("BLOCK_STATUS:");
     for (i = 0; i < FILEBLK; i++) {
         printf("%d", block_used[i]);
+    }
+    printf("\n");
+
+    printf("INODE_STATUS:");
+    for (i = 0; i < DINODEBLK * (BLOCKSIZ / DINODESIZ); i++) {
+        printf("%d", inode_used[i]);
     }
     printf("\n");
 }
@@ -172,6 +180,10 @@ int main(void) {
             unsigned short mode;
             scanf("%s %ho", arg1, &mode);
             chmod(arg1, mode);
+        } else if (strcmp(cmd, "grant") == 0) {
+            int writable = 0;
+            scanf("%s %s %d", arg1, arg2, &writable);
+            grant(arg1, arg2, writable);
         } else if (strcmp(cmd, "chdir") == 0) {
             scanf("%s", arg1);
             chdir(arg1);
@@ -257,6 +269,7 @@ int main(void) {
             printf("  mkdir <name> - Create a directory\n");
             printf("  rmdir <name> - Remove a directory\n");
             printf("  chmod <name> <mode> - Change file permissions\n");
+            printf("  grant <path> <user> <writable> - Root grants file access to a user\n");
             printf("  chdir <name> - Change current directory\n");
             printf("  dir - List directory contents\n");
             printf("  blocks - Show block usage status\n");

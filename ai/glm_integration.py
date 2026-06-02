@@ -68,6 +68,28 @@ def parse_with_glm(user_input: str):
     return heuristic_command(user_input)
 
 
+def normalize_commands(result):
+    """Normalize single or multiple command outputs into a list."""
+    if not isinstance(result, dict):
+        return []
+
+    commands = result.get("commands")
+    if isinstance(commands, list):
+        normalized = []
+        for item in commands:
+            if isinstance(item, str):
+                parts = re.split(r"[\r\n;]+", item)
+                normalized.extend(part.strip() for part in parts if part.strip())
+        if normalized:
+            return normalized
+
+    command = result.get("command", "")
+    if isinstance(command, str) and command.strip():
+        return [part.strip() for part in re.split(r"[\r\n;]+", command) if part.strip()]
+
+    return []
+
+
 def main():
     if len(sys.argv) < 2:
         print("请输入自然语言请求")
@@ -77,11 +99,15 @@ def main():
     user_input = sys.argv[1]
     result = parse_with_glm(user_input)
     explanation = result.get("explanation", "")
-    command = result.get("command", "")
+    commands = normalize_commands(result)
 
     if explanation:
         print(explanation)
-    print(f"EXEC:{command or 'unknown'}")
+    if commands:
+        for command in commands:
+            print(f"EXEC:{command}")
+    else:
+        print("EXEC:unknown")
 
 
 if __name__ == "__main__":
