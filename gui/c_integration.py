@@ -7,10 +7,23 @@ import queue
 import subprocess
 import threading
 import time
+import platform
+
+
+# ========== 跨平台自动配置 ==========
+OS_NAME = platform.system()
+# 可执行文件名
+if OS_NAME == "Windows":
+    BIN_NAME = "filesystem.exe"
+    BUILD_CMD = ["powershell", "-ExecutionPolicy", "Bypass", "-File", "build.ps1"]
+else:
+    # Linux / WSL / macOS
+    BIN_NAME = "filesystem"
+    BUILD_CMD = ["make"]
 
 
 class CSystemWrapper:
-    """Owns the filesystem.exe process and streams its output."""
+    """Owns the filesystem process and streams its output."""
 
     def __init__(self):
         self.process = None
@@ -18,19 +31,20 @@ class CSystemWrapper:
         self.reading = False
 
     def start(self):
-        """Start filesystem.exe, building it first only when missing."""
+        """Start filesystem, building it first only when missing."""
         try:
-            if not os.path.exists("filesystem.exe"):
-                if os.name == "nt":
-                    subprocess.run(
-                        "powershell -ExecutionPolicy Bypass -File build.ps1",
-                        shell=True,
-                    )
-                else:
-                    subprocess.run("make", shell=True)
+            # 自动判断是否存在可执行文件
+            if not os.path.exists(BIN_NAME):
+                subprocess.run(BUILD_CMD, shell=False)
+
+            # 跨平台启动命令
+            if OS_NAME == "Windows":
+                exec_cmd = [BIN_NAME]
+            else:
+                exec_cmd = [f"./{BIN_NAME}"]
 
             self.process = subprocess.Popen(
-                ["filesystem.exe"],
+                exec_cmd,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,

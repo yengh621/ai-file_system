@@ -10,6 +10,17 @@ import sys
 import tempfile
 import textwrap
 from pathlib import Path
+import platform
+
+
+# ========== 跨平台全局配置 ==========
+OS_NAME = platform.system()
+if OS_NAME == "Windows":
+    BIN_NAME = "filesystem.exe"
+    BUILD_CMD = ["powershell", "-ExecutionPolicy", "Bypass", "-File", "build.ps1"]
+else:
+    BIN_NAME = "filesystem"
+    BUILD_CMD = ["make"]
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -29,7 +40,7 @@ def compile_python() -> list[str]:
 
 def build_filesystem() -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["powershell", "-ExecutionPolicy", "Bypass", "-File", "build.ps1"],
+        BUILD_CMD,
         cwd=ROOT,
         text=True,
         capture_output=True,
@@ -38,14 +49,19 @@ def build_filesystem() -> subprocess.CompletedProcess[str]:
 
 
 def prepare_env(tmp: Path) -> None:
-    shutil.copy2(ROOT / "filesystem.exe", tmp / "filesystem.exe")
+    shutil.copy2(ROOT / BIN_NAME, tmp / BIN_NAME)
     shutil.copytree(ROOT / "ai", tmp / "ai")
     shutil.copy2(ROOT / "config.json", tmp / "config.json")
 
 
 def run_fs(commands: str, cwd: Path) -> str:
+    if OS_NAME == "Windows":
+        exec_cmd = [BIN_NAME]
+    else:
+        exec_cmd = [f"./{BIN_NAME}"]
+
     output = subprocess.check_output(
-        [str(cwd / "filesystem.exe")],
+        exec_cmd,
         input=textwrap.dedent(commands).lstrip().encode("utf-8"),
         cwd=cwd,
     )

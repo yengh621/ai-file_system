@@ -113,7 +113,7 @@ void format(void) {
     }
     sb.s_ninode = NICINOD;
     for (i = 0; i < NICINOD; i++) {
-        sb.s_inode[i] = 32 - i;
+        sb.s_inode[i] = 512 - i;
     }
     /* 初始化 AI 相关字段 */
     sb.ai_context_blk_num = 0;

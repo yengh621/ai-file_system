@@ -3,10 +3,14 @@
 int ialloc(void) {
     int ino;
     if (sb.s_ninode > 0) {
-        ino = sb.s_inode[--sb.s_ninode];
-        sb.s_fmod = 1;
-        return ino;
+    ino = sb.s_inode[--sb.s_ninode];
+    if (ino < 1 || ino > 512) {   // 有效性检查
+        printf("Error: invalid inode %d from stack!\n", ino);
+        // 可尝试扫描或返回 0
     }
+    sb.s_fmod = 1;
+    return ino;
+}
     for (ino = 1; ino <= DINODEBLK * (BLOCKSIZ / DINODESIZ); ino++) {
         struct dinode di;
         iget_inode(ino, &di);
@@ -21,8 +25,12 @@ int ialloc(void) {
 void ifree(int ino) {
     if (sb.s_ninode < NICINOD) {
         sb.s_inode[sb.s_ninode++] = ino;
-        sb.s_fmod = 1;
     }
+    // 清零磁盘 inode 的 di_mode，标记为空闲
+    struct dinode di;
+    memset(&di, 0, sizeof(di));
+    iput_inode(ino, &di);   // 直接写回清零的 dinode
+    sb.s_fmod = 1;
 }
 
 int balloc(void) {
