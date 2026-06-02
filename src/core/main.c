@@ -1,15 +1,18 @@
 #include "filesystem.h"
 
+static void mark_data_block(int absolute_blkno, int block_used[FILEBLK]) {
+    int data_index = absolute_blkno - DATASTART;
+    if (data_index >= 0 && data_index < FILEBLK) {
+        block_used[data_index] = 1;
+    }
+}
+
+#if 0
 void print_block_status() {
-    int block_used[512] = {0};  // 512个块，0=空闲，1=占用
-    int blkno, i;
+    int block_used[FILEBLK] = {0};
+    int i;
 
     // 首先，超级块和inode块是被占用的
-    block_used[SUPERBLOCK] = 1;
-    for (i = 0; i < DINODEBLK; i++) {
-        block_used[DINODESTART + i] = 1;
-    }
-
     // 扫描所有inode，找出被占用的块
     for (i = 1; i <= DINODEBLK * (BLOCKSIZ / DINODESIZ); i++) {
         struct dinode di;
@@ -19,19 +22,15 @@ void print_block_status() {
 
         // 直接块
         for (int j = 0; j < 6; j++) {
-            if (di.di_addr[j] != 0 && di.di_addr[j] < 512) {
-                block_used[di.di_addr[j]] = 1;
-            }
+            mark_data_block(di.di_addr[j], block_used);
         }
         // 一级间接块
-        if (di.di_addr[6] != 0 && di.di_addr[6] < 512) {
-            block_used[di.di_addr[6]] = 1;
+        if (di.di_addr[6] != 0) {
+            mark_data_block(di.di_addr[6], block_used);
             bread(di.di_addr[6], block_buf);
             for (int j = 0; j < 128; j++) {
                 int bn = ((unsigned short*)block_buf)[j];
-                if (bn != 0 && bn < 512) {
-                    block_used[bn] = 1;
-                }
+                mark_data_block(bn, block_used);
             }
         }
         // 二级间接块
@@ -62,8 +61,57 @@ void print_block_status() {
     printf("\n");
 }
 
+#endif
+
+void print_block_status() {
+    int block_used[FILEBLK] = {0};
+    int i;
+
+    for (i = 1; i <= DINODEBLK * (BLOCKSIZ / DINODESIZ); i++) {
+        struct dinode di;
+        iget_inode(i, &di);
+
+        if (di.di_mode == 0) continue;
+
+        for (int j = 0; j < 6; j++) {
+            mark_data_block(di.di_addr[j], block_used);
+        }
+
+        if (di.di_addr[6] != 0) {
+            mark_data_block(di.di_addr[6], block_used);
+            bread(di.di_addr[6], block_buf);
+            for (int j = 0; j < 128; j++) {
+                mark_data_block(((unsigned short*)block_buf)[j], block_used);
+            }
+        }
+
+        if (di.di_addr[7] != 0) {
+            mark_data_block(di.di_addr[7], block_used);
+            bread(di.di_addr[7], block_buf);
+            for (int j = 0; j < 128; j++) {
+                int bn1 = ((unsigned short*)block_buf)[j];
+                if (bn1 != 0) {
+                    mark_data_block(bn1, block_used);
+                    bread(bn1, block_buf);
+                    for (int k = 0; k < 128; k++) {
+                        mark_data_block(((unsigned short*)block_buf)[k], block_used);
+                    }
+                }
+            }
+        }
+    }
+
+    printf("BLOCK_STATUS:");
+    for (i = 0; i < FILEBLK; i++) {
+        printf("%d", block_used[i]);
+    }
+    printf("\n");
+}
+
 int main(void) {
     int i;
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
     for (i = 0; i < NHINO; i++) inode[i] = NULL;
     for (i = 0; i < NOFILE; i++) u_ofile[i] = -1;
     init_file_locks();
@@ -71,13 +119,18 @@ int main(void) {
     char cmd[64], arg1[256], arg2[256];
     while (1) {
         printf("$ ");
+        fflush(stdout);
         scanf("%s", cmd);
         if (strcmp(cmd, "login") == 0) {
             login();
         } else if (strcmp(cmd, "logout") == 0) {
             logout();
         } else if (strcmp(cmd, "format") == 0) {
-            format();
+            if (cur_uid == -1) {
+                printf("Not logged in.\n");
+            } else {
+                format();
+            }
         } else if (strcmp(cmd, "create") == 0) {
             scanf("%s", arg1);
             create(arg1);
@@ -146,6 +199,16 @@ int main(void) {
             int ino;
             scanf("%d", &ino);
             kfs_show_tags(ino);
+        } else if (strcmp(cmd, "hot_cache") == 0) {
+            kfs_hot_cache_show();
+        } else if (strcmp(cmd, "kfs_save") == 0) {
+            kfs_save_to_disk();
+        } else if (strcmp(cmd, "kfs_load") == 0) {
+            kfs_load_from_disk();
+        } else if (strcmp(cmd, "kfs_ai_select") == 0) {
+            kfs_ai_select_hot_files();
+        } else if (strcmp(cmd, "kfs_memory_map") == 0) {
+            kfs_show_memory_map();
         } else if (strcmp(cmd, "init_io_opt") == 0) {
             init_workload_analyzer();
         } else if (strcmp(cmd, "io_stats") == 0) {
@@ -164,6 +227,20 @@ int main(void) {
             integration_show_suggestions();
         } else if (strcmp(cmd, "analyze") == 0) {
             integration_show_suggestions();
+        } else if (strcmp(cmd, "link") == 0) {
+            scanf("%s %s", arg1, arg2);
+            link(arg1, arg2);
+        } else if (strcmp(cmd, "symlink") == 0) {
+            scanf("%s %s", arg1, arg2);
+            symlink(arg1, arg2);
+        } else if (strcmp(cmd, "readlink") == 0) {
+            scanf("%s", arg1);
+            char buf[DIRSIZ + 1];
+            readlink(arg1, buf, DIRSIZ);
+            printf("readlink: %s\n", buf);
+        } else if (strcmp(cmd, "unlink") == 0) {
+            scanf("%s", arg1);
+            fs_unlink(arg1);
         } else if (strcmp(cmd, "blocks") == 0) {
             print_block_status();
         } else if (strcmp(cmd, "help") == 0) {
@@ -184,11 +261,21 @@ int main(void) {
             printf("  dir - List directory contents\n");
             printf("  blocks - Show block usage status\n");
             printf("  nlp <text> - Natural language interaction\n");
+            printf("\n=== 链接功能 ===\n");
+            printf("  link <oldpath> <newpath> - Create hard link\n");
+            printf("  symlink <oldpath> <newpath> - Create symbolic link\n");
+            printf("  readlink <path> - Read symbolic link\n");
+            printf("  unlink <path> - Remove link or file\n");
             printf("\n=== 创新功能 ===\n");
-            printf("  [KFS 智能文件分类]\n");
+            printf("  [KFS 智能文件系统]\n");
             printf("    init_kfs - Initialize KFS system\n");
             printf("    kfs_list <vdir> - List virtual directory\n");
             printf("    kfs_tags <ino> - Show file tags\n");
+            printf("    kfs_save - Save KFS data to disk\n");
+            printf("    kfs_load - Load KFS data from disk\n");
+            printf("    kfs_ai_select - AI select hot files\n");
+            printf("    kfs_memory_map - Show KFS memory content\n");
+            printf("    hot_cache - Show hot file cache\n");
             printf("  [AI I/O 优化]\n");
             printf("    init_io_opt - Initialize I/O optimizer\n");
             printf("    io_stats - Show I/O statistics\n");

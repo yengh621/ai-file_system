@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# C / Build
+*.o
+*.exe
+*.dll
+*.so
+*.dylib
+vdisk.bin
+*.obj
+*.lib
+*.a
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Debug / Memory
+debug_memory/
+
+# Test
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Temporary
+*.tmp
+*.bak
+*.swp
+test_input.txt
+test_output.txt

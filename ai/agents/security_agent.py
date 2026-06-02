@@ -76,8 +76,12 @@ class SecurityAgent(BaseAgent):
         
         try:
             with open(self.learned_params_file, "r", encoding="utf-8") as f:
-                all_params = json.load(f)
-            return all_params.get(str(uid), {"suggested_delete_threshold": 5, "suggested_modify_threshold": 10})
+                data = json.load(f)
+            params = data.get("parameters", {}) if isinstance(data, dict) else {}
+            return {
+                "suggested_delete_threshold": params.get("delete_threshold", 5),
+                "suggested_modify_threshold": params.get("modify_threshold", 10)
+            }
         except Exception as e:
             self.log(f"读取最近参数失败: {e}")
             return {"suggested_delete_threshold": 5, "suggested_modify_threshold": 10}

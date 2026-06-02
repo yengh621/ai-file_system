@@ -1,8 +1,8 @@
 {
   "glm": {
-    "api_key": "your_api_key_here",
+    "api_key": "36c717f4ff754e438d97f3af9b722f13.lhYV8ofzJ7W23u4B",
     "api_base_url": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-    "model_name": "glm-4",
+    "model_name": "glm-4.7-flash",
     "timeout": 30
   },
   "kfs": {

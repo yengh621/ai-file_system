@@ -69,9 +69,6 @@ void create(char *name) {
     iput(ip);
     iput(dip);
     printf("Create successful.\n");
-    
-    /* KFS 自动分类 */
-    kfs_classify_file(name, ino);
 }
 
 void delete(char *name) {
@@ -220,6 +217,8 @@ int open(char *name, int mode) {
     sysopenfile[i].f_count = 1;
     sysopenfile[i].f_inode = ip;
     sysopenfile[i].f_offset = 0;
+    strncpy(sysopenfile[i].f_name, name, DIRSIZ - 1);
+    sysopenfile[i].f_name[DIRSIZ - 1] = '\0';
     u_ofile[fd] = i;
     printf("Open successful, fd = %d\n", fd);
     return fd;
@@ -277,14 +276,26 @@ int read(int fd, unsigned char *buf, int count) {
         if (bn == 0) break;
         int len = BLOCKSIZ - (offset % BLOCKSIZ);
         if (len > count) len = count;
-        bread(bn, block_buf);
+        
+        /* 先查 Per-File 预取缓存 */
+        int cache_hit = 0;
+        if (get_prefetched_block(ip->i_ino, lbn, block_buf)) {
+            cache_hit = 1;
+        } else {
+            /* 缓存未命中，读磁盘 */
+            bread(bn, block_buf);
+        }
+        
         memcpy(buf + total, block_buf + (offset % BLOCKSIZ), len);
         total += len;
         offset += len;
         count -= len;
         
-        /* 记录 I/O 请求用于自适应优化 */
+        /* 记录 I/O 请求（触发该文件的预取） */
         record_io_request(ip->i_ino, lbn, 1);
+        
+        /* 更新 KFS 热点缓存 */
+        kfs_hot_cache_update(f->f_name, ip->i_ino);
     }
     f->f_offset = offset;
     printf("Read %d bytes.\n", total);

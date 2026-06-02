@@ -5,14 +5,98 @@
 AI 集成模块 - 与多智能体系统交互
 """
 import os
+import sys
 import json
 from .styles import Filesystem
+
+# 添加 AI 模块路径
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
+from ai.memory.recorder import MemoryRecorder
+from ai.orchestrator import AgentOrchestrator
+
+
+class AIIntegration:
+    """AI 集成类 - 连接 GUI 和 AI 智能体"""
+    
+    def __init__(self):
+        self.recorder = MemoryRecorder()
+        self.orchestrator = None
+        self.current_uid = -1
+    
+    def set_user(self, uid):
+        """设置当前用户并初始化记忆记录"""
+        self.current_uid = uid
+        self.recorder.set_user(uid)
+        print(f"[AI Integration] 用户 {uid} 已设置，开始记录操作")
+    
+    def clear_user(self):
+        """清除当前用户"""
+        self.recorder.clear_user()
+        self.current_uid = -1
+        print("[AI Integration] 用户已登出")
+    
+    def record_operation(self, operation, path=None):
+        """记录操作到记忆系统"""
+        if self.current_uid == -1:
+            return {"status": "error", "message": "未登录"}
+        return self.recorder.record_operation(operation, path)
+    
+    def get_short_term_memory(self):
+        """获取短时记忆（最近操作）"""
+        context = self.recorder.get_context()
+        if context.get("status") == "success":
+            return context.get("recent_ops", [])
+        return []
+    
+    def get_long_term_memory(self):
+        """获取长时记忆（历史操作）"""
+        context = self.recorder.get_context()
+        if context.get("status") == "success":
+            return context.get("historical_ops", [])
+        return []
+    
+    def run_analysis(self):
+        """运行完整的 AI 分析"""
+        if self.current_uid == -1:
+            return {"status": "error", "message": "请先登录"}
+        
+        if not self.orchestrator:
+            self.orchestrator = AgentOrchestrator()
+        
+        # 设置用户
+        self.orchestrator.set_user(self.current_uid)
+        
+        # 执行分析
+        result = self.orchestrator.run_full_analysis()
+        
+        # 保存分析结果
+        if result.get("status") == "success":
+            self.recorder.save_full_analysis(result)
+        
+        return result
+    
+    def get_current_params(self):
+        """获取当前学习参数"""
+        return self.recorder.get_current_params()
+    
+    def get_agent_calls(self):
+        """获取智能体调用记录"""
+        try:
+            path = self.recorder.agent_calls_file
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception as e:
+            print(f"[AI Integration] 读取调用记录失败: {e}")
+        return []
 
 
 def get_used_space():
     """获取已用空间（估算）"""
     try:
-        record_path = os.path.join("debug_memory", "agent", "memory", "long_term", "all_operations.json")
+        recorder = MemoryRecorder()
+        record_path = recorder.long_term_file
         if os.path.exists(record_path):
             with open(record_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
@@ -25,12 +109,13 @@ def get_used_space():
 def get_last_analysis():
     """获取最后一次分析结果"""
     try:
-        path = os.path.join("debug_memory", "agent", "memory", "long_term", "last_analysis.json")
+        recorder = MemoryRecorder()
+        path = recorder.learned_params_file
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[AI Integration] 读取分析结果失败: {e}")
     return None
 
 
@@ -61,4 +146,9 @@ def format_analysis(data):
 - 预取窗口: {params.get('prefetch_window', 3)}
 - 删除阈值: {params.get('delete_threshold', 8)}
 - 修改阈值: {params.get('modify_threshold', 12)}
+- 热点文件: {len(params.get('hot_files', []))} 个
 """
+
+
+# 全局实例
+ai_integration = AIIntegration()

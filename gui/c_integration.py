@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-C 端集成模块 - 通过子进程连接真实的文件系统
-"""
+"""Bridge between the Tkinter GUI and the C filesystem executable."""
+
+import os
+import queue
 import subprocess
 import threading
-import queue
+import time
 
 
 class CSystemWrapper:
-    """C 端系统封装类"""
+    """Owns the filesystem.exe process and streams its output."""
 
     def __init__(self):
         self.process = None
@@ -17,13 +18,14 @@ class CSystemWrapper:
         self.reading = False
 
     def start(self):
-        """启动 C 端系统"""
+        """Start filesystem.exe, building it first only when missing."""
         try:
-            # 先编译
-            import os
             if not os.path.exists("filesystem.exe"):
-                if os.name == 'nt':
-                    subprocess.run("build.bat", shell=True)
+                if os.name == "nt":
+                    subprocess.run(
+                        "powershell -ExecutionPolicy Bypass -File build.ps1",
+                        shell=True,
+                    )
                 else:
                     subprocess.run("make", shell=True)
 
@@ -32,61 +34,93 @@ class CSystemWrapper:
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                universal_newlines=True
+                bufsize=0,
             )
 
             self.reading = True
-            t = threading.Thread(target=self._read_output, daemon=True)
-            t.start()
+            reader = threading.Thread(target=self._read_output, daemon=True)
+            reader.start()
 
+            self.get_output_until_prompt(timeout=0.5)
             return True
-
-        except Exception as e:
-            print(f"启动 C 端失败: {e}")
+        except Exception as exc:
+            print(f"Failed to start C backend: {exc}")
             return False
 
     def _read_output(self):
-        """读取输出的线程"""
+        """Block on stdout and push decoded chunks into the queue."""
         while self.reading:
             try:
-                line = self.process.stdout.readline()
-                if not line and self.process.poll() is not None:
+                chunk = os.read(self.process.stdout.fileno(), 4096)
+                if not chunk and self.process.poll() is not None:
                     break
-                self.output_queue.put(line)
+                if chunk:
+                    self.output_queue.put(self._decode_output(chunk))
             except Exception:
                 break
 
     def send_command(self, cmd):
-        """发送命令到 C 端"""
+        """Send one command line to the backend."""
         if not self.process or self.process.poll() is not None:
-            return "系统未启动"
+            return "System is not running."
 
         try:
-            self.process.stdin.write(cmd + "\n")
+            self.process.stdin.write((cmd + "\n").encode("utf-8"))
             self.process.stdin.flush()
             return True
-        except Exception as e:
-            return f"命令发送失败: {e}"
+        except Exception as exc:
+            return f"Failed to send command: {exc}"
+
+    def _decode_output(self, chunk):
+        """Decode mixed UTF-8/GB18030 output from the backend."""
+        try:
+            return chunk.decode("utf-8")
+        except UnicodeDecodeError:
+            return chunk.decode("gb18030", errors="replace")
 
     def get_output(self, timeout=0.5):
-        """获取输出"""
+        """Drain currently available output until a queue timeout."""
         output = []
-        try:
-            while True:
-                try:
-                    line = self.output_queue.get(timeout=timeout)
-                    output.append(line)
-                except queue.Empty:
-                    break
-        except Exception:
-            pass
+        while True:
+            try:
+                output.append(self.output_queue.get(timeout=timeout))
+            except queue.Empty:
+                break
+        return "".join(output)
 
+    def get_output_until_text(self, text, timeout=1.0):
+        """Read output until a specific prompt text appears."""
+        output = []
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            wait = max(0.01, min(0.05, deadline - time.monotonic()))
+            try:
+                chunk = self.output_queue.get(timeout=wait)
+                output.append(chunk)
+                if text in "".join(output):
+                    break
+            except queue.Empty:
+                continue
+        return "".join(output)
+
+    def get_output_until_prompt(self, timeout=1.0):
+        """Read output until the backend prints its next '$ ' prompt."""
+        output = []
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            wait = max(0.01, min(0.05, deadline - time.monotonic()))
+            try:
+                chunk = self.output_queue.get(timeout=wait)
+                output.append(chunk)
+                joined = "".join(output)
+                if joined.endswith("$ ") or joined.rstrip().endswith("$"):
+                    break
+            except queue.Empty:
+                continue
         return "".join(output)
 
     def stop(self):
-        """停止 C 端"""
+        """Stop the backend process."""
         self.reading = False
         if self.process:
             try:
@@ -97,84 +131,69 @@ class CSystemWrapper:
 
 
 class CSystemClient:
-    """简化的 C 端客户端"""
+    """Small command-oriented client used by the GUI."""
 
     def __init__(self):
         self.wrapper = CSystemWrapper()
         self.is_logged_in = False
 
     def start_system(self):
-        """启动系统"""
+        """Start the backend process."""
         return self.wrapper.start()
 
     def execute(self, cmd):
-        """执行命令并获取输出"""
+        """Execute an existing backend command and return its output."""
         self.wrapper.send_command(cmd)
-        # 小延迟让输出进来
-        import time
-        time.sleep(0.2)
-        return self.wrapper.get_output()
+        return self.wrapper.get_output_until_prompt(timeout=1.0)
 
-    def login(self, username="admin", password="admin"):
-        """登录系统"""
-        # C 端 login 是交互式的，我们用默认值
-        output = self.execute("login")
-        self.is_logged_in = True
+    def login(self, username, password):
+        """Drive the interactive login flow without fixed delays."""
+        self.wrapper.send_command("login")
+        output = self.wrapper.get_output_until_text("Username:", timeout=1.0)
+        self.wrapper.send_command(username)
+        output += self.wrapper.get_output_until_text("Password:", timeout=1.0)
+        self.wrapper.send_command(password)
+        output += self.wrapper.get_output_until_prompt(timeout=1.0)
+        self.is_logged_in = "Login successful" in output
         return output
 
     def logout(self):
-        """登出"""
+        """Log out from the backend."""
         output = self.execute("logout")
         self.is_logged_in = False
         return output
 
     def create_file(self, name):
-        """创建文件"""
+        """Create a file."""
         return self.execute(f"create {name}")
 
     def create_dir(self, name):
-        """创建目录"""
+        """Create a directory."""
         return self.execute(f"mkdir {name}")
 
     def delete_file(self, name):
-        """删除文件"""
+        """Delete a file."""
         return self.execute(f"delete {name}")
 
     def list_dir(self):
-        """列出目录"""
+        """List the current directory."""
         return self.execute("dir")
 
-    def nlp(self, text):
-        """自然语言处理"""
-        return self.execute(f"nlp {text}")
-
-    def suggest(self):
-        """获取建议"""
-        return self.execute("suggestions")
-
-    def analyze(self):
-        """分析"""
-        return self.execute("analyze")
-
-    def optimize(self):
-        """优化"""
-        return self.execute("optimize")
-
     def get_block_status(self):
-        """获取块使用状态，返回一个512长度的布尔列表"""
+        """Return a 512-entry boolean block usage list."""
         output = self.execute("blocks")
-        for line in output.split('\n'):
-            if line.startswith("BLOCK_STATUS:"):
-                status_str = line[len("BLOCK_STATUS:"):].strip()
-                blocks = []
-                for i in range(min(len(status_str), 512)):
-                    blocks.append(status_str[i] == '1')
-                # 补齐到512
-                while len(blocks) < 512:
-                    blocks.append(False)
-                return blocks
+        marker = "BLOCK_STATUS:"
+        if marker in output:
+            raw_status = output.split(marker, 1)[1]
+            status = "".join(ch for ch in raw_status if ch in "01")[:512]
+            blocks = [ch == "1" for ch in status]
+            return blocks + [False] * (512 - len(blocks))
         return [False] * 512
 
+    def nlp(self, text):
+        """Send natural-language input to the backend."""
+        return self.execute(f"nlp {text}")
+
     def stop(self):
-        """停止"""
+        """Stop the backend process."""
         self.wrapper.stop()

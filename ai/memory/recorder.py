@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Recorder Agent - 记忆记录模块
+Per-user memory recorder.
 
-短时记忆：
-- 保存到 debug_memory/short_term/operations.json
-- 保存最近 100 条操作
-- 超过 48 小时自动清空
+Each user owns an isolated memory tree:
+  debug_memory/users/<uid>/short_term/operations.json
+  debug_memory/users/<uid>/agent/memory/long_term/all_operations.json
+  debug_memory/users/<uid>/agent/memory/long_term/learned_params.json
 
-长时记忆：
-- 保存到 debug_memory/agent/memory/long_term/all_operations.json
-- 所有历史操作记录
-- 学习参数保存到 debug_memory/agent/memory/long_term/learned_params.json
+The active user is persisted in debug_memory/current_user.json so CLI calls from
+the C backend can share the same user context across separate Python processes.
 """
 import json
 import os
@@ -22,236 +20,258 @@ from typing import Dict, List
 class MemoryRecorder:
     def __init__(self, memory_dir="debug_memory"):
         self.memory_dir = memory_dir
-        
-        # 短时记忆目录和文件
-        self.short_term_dir = os.path.join(self.memory_dir, "short_term")
+        self.users_dir = os.path.join(self.memory_dir, "users")
+        self.active_user_file = os.path.join(self.memory_dir, "current_user.json")
+        self.current_uid = self._load_active_user()
+
+        os.makedirs(self.users_dir, exist_ok=True)
+        self._configure_paths(self.current_uid)
+        self._load_all()
+
+    def _configure_paths(self, uid: int):
+        uid_name = str(uid) if uid != -1 else "_anonymous"
+        self.user_dir = os.path.join(self.users_dir, uid_name)
+        self.short_term_dir = os.path.join(self.user_dir, "short_term")
         self.short_term_file = os.path.join(self.short_term_dir, "operations.json")
-        
-        # 长时记忆目录
-        self.long_term_dir = os.path.join(self.memory_dir, "agent", "memory", "long_term")
+        self.long_term_dir = os.path.join(self.user_dir, "agent", "memory", "long_term")
         self.long_term_file = os.path.join(self.long_term_dir, "all_operations.json")
-        
-        # 学习参数文件
         self.learned_params_file = os.path.join(self.long_term_dir, "learned_params.json")
-        
-        self.current_uid = -1
-        
-        # 确保目录存在
+        self.agent_calls_file = os.path.join(self.user_dir, "agent_calls.json")
+
         os.makedirs(self.short_term_dir, exist_ok=True)
         os.makedirs(self.long_term_dir, exist_ok=True)
-        
-        # 加载数据
+
+    def _load_all(self):
         self.short_term_ops = self._load_short_term()
         self.long_term_ops = self._load_long_term()
         self.learned_params = self._load_learned_params()
-    
+
+    def _load_active_user(self) -> int:
+        if not os.path.exists(self.active_user_file):
+            return -1
+        try:
+            with open(self.active_user_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return int(data.get("uid", -1))
+        except Exception:
+            return -1
+
+    def _save_active_user(self):
+        os.makedirs(self.memory_dir, exist_ok=True)
+        with open(self.active_user_file, "w", encoding="utf-8") as f:
+            json.dump(
+                {"uid": self.current_uid, "updated_at": datetime.now().isoformat()},
+                f,
+                ensure_ascii=False,
+                indent=2,
+            )
+
+    def _load_json_list(self, path: str) -> List[Dict]:
+        if not os.path.exists(path):
+            return []
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except Exception as e:
+            print(f"[Recorder] failed to load list {path}: {e}")
+            return []
+
     def _load_short_term(self) -> List[Dict]:
-        """加载短时记忆，检查是否需要清空"""
-        if not os.path.exists(self.short_term_file):
+        data = self._load_json_list(self.short_term_file)
+        if not data:
             return []
-        
-        try:
-            with open(self.short_term_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            
-            if not isinstance(data, list) or len(data) == 0:
-                return []
-            
-            # 检查第一条记录的时间，如果超过 48 小时则清空
-            first_record = data[0]
-            if "timestamp" in first_record:
-                try:
-                    record_time = datetime.fromisoformat(first_record["timestamp"])
-                    if datetime.now() - record_time > timedelta(hours=48):
-                        print("[Recorder] 短时记忆超过 48 小时，已清空")
-                        return []
-                except:
-                    pass
-            
-            # 确保不超过 100 条
-            if len(data) > 100:
-                return data[-100:]
-            
-            return data
-        except Exception as e:
-            print(f"[Recorder] 加载短时记忆失败: {e}")
-            return []
-    
+
+        first_record = data[0]
+        if "timestamp" in first_record:
+            try:
+                record_time = datetime.fromisoformat(first_record["timestamp"])
+                if datetime.now() - record_time > timedelta(hours=48):
+                    return []
+            except Exception:
+                pass
+        return data[-100:]
+
     def _save_short_term(self):
-        """保存短时记忆"""
-        try:
-            with open(self.short_term_file, "w", encoding="utf-8") as f:
-                json.dump(self.short_term_ops, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"[Recorder] 保存短时记忆失败: {e}")
-    
+        with open(self.short_term_file, "w", encoding="utf-8") as f:
+            json.dump(self.short_term_ops[-100:], f, ensure_ascii=False, indent=2)
+
     def _load_long_term(self) -> List[Dict]:
-        """加载长时记忆"""
-        if not os.path.exists(self.long_term_file):
-            return []
-        
-        try:
-            with open(self.long_term_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, list):
-                return data
-        except Exception as e:
-            print(f"[Recorder] 加载长时记忆失败: {e}")
-        
-        return []
-    
+        return self._load_json_list(self.long_term_file)
+
     def _save_long_term(self):
-        """保存长时记忆（最多保存 10000 条）"""
-        try:
-            with open(self.long_term_file, "w", encoding="utf-8") as f:
-                json.dump(self.long_term_ops[-10000:], f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"[Recorder] 保存长时记忆失败: {e}")
-    
+        with open(self.long_term_file, "w", encoding="utf-8") as f:
+            json.dump(self.long_term_ops[-10000:], f, ensure_ascii=False, indent=2)
+
     def _load_learned_params(self) -> Dict:
-        """加载学习参数"""
         if not os.path.exists(self.learned_params_file):
-            return {}
-        
+            return self._get_default_params()
         try:
             with open(self.learned_params_file, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+            return data if isinstance(data, dict) and "parameters" in data else self._get_default_params()
         except Exception as e:
-            print(f"[Recorder] 加载学习参数失败: {e}")
-            return {}
-    
+            print(f"[Recorder] failed to load learned params: {e}")
+            return self._get_default_params()
+
+    def _get_default_params(self) -> Dict:
+        return {
+            "uid": self.current_uid,
+            "timestamp": datetime.now().isoformat(),
+            "behavior_pattern": "",
+            "kfs_suggestion": "",
+            "io_suggestion": "",
+            "security_suggestion": "",
+            "parameters": {
+                "file_prefetch_windows": {},
+                "delete_threshold": 5,
+                "modify_threshold": 10,
+                "auto_tagging_enabled": True,
+                "category_rules": [],
+                "hot_files": [],
+            },
+        }
+
     def _save_learned_params(self):
-        """保存学习参数"""
-        try:
-            with open(self.learned_params_file, "w", encoding="utf-8") as f:
-                json.dump(self.learned_params, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"[Recorder] 保存学习参数失败: {e}")
-    
+        with open(self.learned_params_file, "w", encoding="utf-8") as f:
+            json.dump(self.learned_params, f, ensure_ascii=False, indent=2)
+
+    def _migrate_legacy_user_data(self, uid: int):
+        legacy_short = os.path.join(self.memory_dir, "short_term", "operations.json")
+        legacy_long = os.path.join(self.memory_dir, "agent", "memory", "long_term", "all_operations.json")
+        legacy_params = os.path.join(self.memory_dir, "agent", "memory", "long_term", "learned_params.json")
+
+        if not os.path.exists(self.short_term_file):
+            records = [op for op in self._load_json_list(legacy_short) if op.get("uid") == uid]
+            if records:
+                with open(self.short_term_file, "w", encoding="utf-8") as f:
+                    json.dump(records[-100:], f, ensure_ascii=False, indent=2)
+
+        if not os.path.exists(self.long_term_file):
+            records = [op for op in self._load_json_list(legacy_long) if op.get("uid") == uid]
+            if records:
+                with open(self.long_term_file, "w", encoding="utf-8") as f:
+                    json.dump(records[-10000:], f, ensure_ascii=False, indent=2)
+
+        if not os.path.exists(self.learned_params_file) and os.path.exists(legacy_params):
+            try:
+                with open(legacy_params, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict) and data.get("uid", uid) in {uid, -1}:
+                    data["uid"] = uid
+                    with open(self.learned_params_file, "w", encoding="utf-8") as out:
+                        json.dump(data, out, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+
     def set_user(self, uid: int) -> Dict:
-        """设置当前用户"""
-        self.current_uid = uid
+        self.current_uid = int(uid)
+        self._configure_paths(self.current_uid)
+        self._migrate_legacy_user_data(self.current_uid)
+        self._load_all()
+        self._save_active_user()
         return {
             "status": "success",
-            "uid": uid,
-            "message": f"用户 {uid} 已激活，开始记录操作"
+            "uid": self.current_uid,
+            "memory_dir": self.user_dir,
+            "message": f"user {self.current_uid} activated",
         }
-    
+
     def clear_user(self) -> Dict:
-        """清除当前用户"""
         old_uid = self.current_uid
         self.current_uid = -1
-        return {
-            "status": "success",
-            "message": f"用户 {old_uid} 已登出"
-        }
-    
+        self._configure_paths(self.current_uid)
+        self._load_all()
+        self._save_active_user()
+        return {"status": "success", "message": f"user {old_uid} logged out"}
+
     def record_operation(self, operation: str, path: str = None) -> Dict:
-        """记录操作（同时写到短时和长时记忆）"""
         if self.current_uid == -1:
-            return {"status": "error", "message": "无当前用户，请先设置用户"}
-        
+            return {"status": "error", "message": "no active user"}
+
+        now = datetime.now()
         record = {
             "uid": self.current_uid,
             "operation": operation,
             "path": path,
-            "timestamp": datetime.now().isoformat(),
-            "hour": datetime.now().hour,
-            "day_of_week": datetime.now().weekday()
+            "timestamp": now.isoformat(),
+            "hour": now.hour,
+            "day_of_week": now.weekday(),
         }
-        
-        # 添加到短时记忆
+
         self.short_term_ops.append(record)
-        
-        # 检查短时记忆是否超过 100 条
-        if len(self.short_term_ops) > 100:
-            self.short_term_ops = self.short_term_ops[-100:]
-            print("[Recorder] 短时记忆超过 100 条，已清理旧记录")
-        
+        self.short_term_ops = self.short_term_ops[-100:]
         self._save_short_term()
-        
-        # 添加到长时记忆
+
         self.long_term_ops.append(record)
+        self.long_term_ops = self.long_term_ops[-10000:]
         self._save_long_term()
-        
+
         return {"status": "success", "record": record}
-    
+
     def get_context(self) -> Dict:
-        """获取分析上下文"""
         if self.current_uid == -1:
-            return {"status": "error", "message": "无当前用户，请先设置用户"}
-        
-        uid = self.current_uid
-        
-        # 当前用户的短时操作
-        short_ops = [op for op in self.short_term_ops if op["uid"] == uid]
-        
-        # 当前用户的长时操作
-        long_ops = [op for op in self.long_term_ops if op["uid"] == uid]
-        
-        # 计算统计
-        short_stats = self._calculate_stats(short_ops)
-        long_stats = self._calculate_stats(long_ops)
-        
+            return {"status": "error", "message": "no active user"}
+
+        short_stats = self._calculate_stats(self.short_term_ops)
+        long_stats = self._calculate_stats(self.long_term_ops)
         return {
             "status": "success",
-            "uid": uid,
+            "uid": self.current_uid,
+            "memory_dir": self.user_dir,
             "recent_stats": short_stats,
             "all_stats": long_stats,
-            "recent_ops": short_ops[-20:],
-            "historical_ops": long_ops[-30:]
+            "recent_ops": self.short_term_ops[-20:],
+            "historical_ops": self.long_term_ops[-30:],
         }
-    
+
     def _calculate_stats(self, operations: List[Dict]) -> Dict:
-        """从操作列表计算统计数据"""
         if not operations:
             return {
                 "total_ops": 0,
                 "operation_counts": {},
                 "file_types": {},
                 "hours": [],
-                "days": []
+                "days": [],
             }
-        
+
         op_counts = {}
         file_types = {}
         hours = set()
         days = set()
         recent_files = set()
-        
+
         for op in operations:
-            op_type = op["operation"]
+            op_type = op.get("operation", "")
             op_counts[op_type] = op_counts.get(op_type, 0) + 1
-            
+
             path = op.get("path")
             if path:
                 ext = os.path.splitext(path)[1].lower() or os.path.basename(path)
                 file_types[ext] = file_types.get(ext, 0) + 1
                 recent_files.add(path)
-            
-            hours.add(op.get("hour"))
-            days.add(op.get("day_of_week"))
-        
+
+            if op.get("hour") is not None:
+                hours.add(op.get("hour"))
+            if op.get("day_of_week") is not None:
+                days.add(op.get("day_of_week"))
+
         return {
             "total_ops": len(operations),
             "operation_counts": op_counts,
             "file_types": file_types,
-            "hours": sorted(list(hours)),
-            "days": sorted(list(days)),
-            "recent_files": list(recent_files)[:10]
+            "hours": sorted(hours),
+            "days": sorted(days),
+            "recent_files": list(recent_files)[:10],
         }
-    
-    def save_learned_params(self, uid: int, params: Dict) -> Dict:
-        """保存学习到的参数"""
-        self.learned_params.setdefault(str(uid), {}).update(params)
-        self.learned_params[str(uid)]["last_updated"] = datetime.now().isoformat()
+
+    def save_full_analysis(self, analysis_data: Dict) -> Dict:
+        if self.current_uid != -1:
+            analysis_data["uid"] = self.current_uid
+        self.learned_params = analysis_data
+        self.learned_params["last_updated"] = datetime.now().isoformat()
         self._save_learned_params()
-        return {"status": "success", "message": "参数已保存"}
-    
-    def get_learned_params(self, uid: int) -> Dict:
-        """获取学习到的参数"""
-        return self.learned_params.get(str(uid), {
-            "suggested_prefetch_window": 3,
-            "suggested_delete_threshold": 5,
-            "suggested_modify_threshold": 10
-        })
+        return {"status": "success", "message": "analysis saved", "path": self.learned_params_file}
+
+    def get_current_params(self) -> Dict:
+        return self.learned_params.get("parameters", self._get_default_params()["parameters"])

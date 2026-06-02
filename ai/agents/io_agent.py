@@ -15,25 +15,50 @@ class IOAgent(BaseAgent):
         super().__init__("IO", config)
         self.memory_dir = memory_dir
         self.learned_params_file = os.path.join(memory_dir, "agent", "memory", "long_term", "learned_params.json")
+        self.io_stats_file = os.path.join(memory_dir, "io_stats.json")
     
-    def process(self, guidance: str, context: Dict) -> Dict:
+    def _load_io_stats(self) -> Dict:
+        """加载内核导出的 IO 统计数据"""
+        if not os.path.exists(self.io_stats_file):
+            return {}
+        
+        try:
+            with open(self.io_stats_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            self.log(f"读取 IO 统计失败: {e}")
+            return {}
+    
+    def _load_current_params(self) -> Dict:
+        """从 learned_params.json 加载当前参数"""
+        if not os.path.exists(self.learned_params_file):
+            return {"file_prefetch_windows": {}}
+        
+        try:
+            with open(self.learned_params_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data.get("parameters", {"file_prefetch_windows": {}})
+        except Exception as e:
+            self.log(f"读取当前参数失败: {e}")
+            return {"file_prefetch_windows": {}}
+    
+    def process(self, guidance: str) -> Dict:
         """
-        根据全局指导，调用 GLM 分析 IO 优化
+        根据全局指导和 io_stats.json，调用 GLM 分析 IO 优化
         
         Args:
             guidance: Analyzer 给出的全局指导
-            context: 会话上下文
         
         Returns:
-            IO 优化方案
+            IO 优化方案，包含每个文件的 prefetch_window
         """
-        self.log("根据全局指导，分析 IO 优化...")
+        self.log("根据全局指导和内核 IO 统计，分析 IO 优化...")
         
-        # 获取当前用户 ID 和最近参数
-        uid = context.get("uid", -1)
-        current_params = self._get_current_params(uid)
+        # 获取当前参数和内核 IO 统计
+        current_params = self._load_current_params()
+        io_stats = self._load_io_stats()
         
-        prompt = self._build_prompt(guidance, context, current_params)
+        prompt = self._build_prompt(guidance, current_params, io_stats)
         
         try:
             glm_response = call_glm_api(prompt, config=self.config)
@@ -43,7 +68,7 @@ class IOAgent(BaseAgent):
             parsed_result = self._parse_json_response(glm_response)
             
             # 使用解析结果或回退到当前参数
-            prefetch_window = parsed_result.get("prefetch_window", current_params.get("suggested_prefetch_window", 3))
+            file_prefetch_windows = parsed_result.get("file_prefetch_windows", current_params.get("file_prefetch_windows", {}))
             reason = parsed_result.get("reason", "保持当前配置")
             
             return {
@@ -51,7 +76,7 @@ class IOAgent(BaseAgent):
                 "agent": self.name,
                 "suggestion": reason,
                 "parameters": {
-                    "prefetch_window": prefetch_window
+                    "file_prefetch_windows": file_prefetch_windows
                 }
             }
         except Exception as e:
@@ -61,21 +86,8 @@ class IOAgent(BaseAgent):
                 "agent": self.name,
                 "error": str(e),
                 "suggestion": "保持当前 IO 配置",
-                "parameters": {"prefetch_window": 3}
+                "parameters": {"file_prefetch_windows": {}}
             }
-    
-    def _get_current_params(self, uid: int) -> Dict:
-        """获取当前用户的最近参数"""
-        if not os.path.exists(self.learned_params_file):
-            return {"suggested_prefetch_window": 3}
-        
-        try:
-            with open(self.learned_params_file, "r", encoding="utf-8") as f:
-                all_params = json.load(f)
-            return all_params.get(str(uid), {"suggested_prefetch_window": 3})
-        except Exception as e:
-            self.log(f"读取最近参数失败: {e}")
-            return {"suggested_prefetch_window": 3}
     
     def _parse_json_response(self, response: str) -> Dict:
         """解析 GLM 返回的 JSON 响应"""
@@ -96,39 +108,47 @@ class IOAgent(BaseAgent):
         
         return {}
     
-    def _build_prompt(self, guidance: str, context: Dict, current_params: Dict) -> str:
-        recent_stats = context.get("recent_stats", {})
-        all_stats = context.get("all_stats", {})
-        current_prefetch = current_params.get("suggested_prefetch_window", 3)
+    def _build_prompt(self, guidance: str, current_params: Dict, io_stats: Dict) -> str:
+        # 构建 IO 统计描述
+        io_stats_desc = ""
+        if io_stats:
+            io_stats_desc = f"""【内核全局 IO 统计】
+预取缓存命中: {io_stats.get('cache_hits', 0)}
+预取缓存未命中: {io_stats.get('cache_misses', 0)}
+总预取块数: {io_stats.get('total_prefetched_blocks', 0)}
+顺序访问文件数: {io_stats.get('sequential_files', 0)}
+随机访问文件数: {io_stats.get('random_files', 0)}
+平均预取窗口: {io_stats.get('average_prefetch_window', 0)}
+总读取操作: {io_stats.get('total_read_operations', 0)}
+"""
+            files = io_stats.get("files", [])
+            if files:
+                io_stats_desc += "\n【各文件 IO 统计】\n"
+                for f in files:
+                    io_stats_desc += f"  - inode {f.get('ino')}: type={f.get('type')}, reads={f.get('total_reads')}, current_window={f.get('current_prefetch_window')}\n"
         
         return f"""你是一位 I/O 优化专家。
 
 【全局优化指导】
 {guidance}
 
-【最近行为统计】
-操作总数: {recent_stats.get('total_ops', 0)}
-操作统计: {json.dumps(recent_stats.get('operation_counts', {}), ensure_ascii=False)}
-文件类型: {json.dumps(recent_stats.get('file_types', {}), ensure_ascii=False)}
-
-【历史行为统计】
-操作总数: {all_stats.get('total_ops', 0)}
-操作统计: {json.dumps(all_stats.get('operation_counts', {}), ensure_ascii=False)}
-
-【当前配置】
-当前 prefetch_window: {current_prefetch}
+{io_stats_desc}
 
 【任务】
-请结合用户的长短期行为模式和当前配置，给出 I/O 预取策略的具体优化建议，并给出建议的 prefetch_window 值（整数，范围 1-10）。
-
-预取窗口建议：
-- 1-2：随机访问较多，减少不必要的预取
-- 3-5：混合模式，平衡性能与空间
-- 6-10：顺序访问较多，提高顺序读写性能
+请结合全局优化指导和内核实际的 IO 统计数据，为每个文件决定合适的 prefetch_window 值（整数，范围 1-10）。重点关注：
+- 顺序访问的文件：使用较大的预取窗口（6-10）
+- 随机访问的文件：使用较小的预取窗口（1-2）
+- 不确定的文件：使用中等窗口（3-5）
 
 请仅返回 JSON 格式，不要包含其他文字，格式如下：
 {{
   "reason": "你的优化理由",
-  "prefetch_window": 5
+  "file_prefetch_windows": {{
+    "123": 10,
+    "456": 3,
+    "789": 1
+  }}
 }}
+
+其中 key 是文件的 inode（字符串格式），value 是该文件的 prefetch_window。
 """
