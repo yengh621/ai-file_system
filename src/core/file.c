@@ -181,7 +181,7 @@ int open(char *name, int mode) {
             return -1;
         }
     }
-    if (mode == O_WRONLY || mode == O_RDWR) {
+    if (mode == O_WRONLY || mode == O_RDWR || mode == O_APPEND) {
         if (check_permission(ip, W_OK) != 0) {
             printf("Permission denied.\n");
             iput(ip);
@@ -315,14 +315,19 @@ int write(int fd, unsigned char *buf, int count) {
         return -1;
     }
     struct file *f = &sysopenfile[u_ofile[fd]];
-    
+
     /* 检查打开模式 */
     if (f->f_flag == O_RDONLY) {
         printf("File not open for writing.\n");
         return -1;
     }
-    
+
     struct inode *ip = f->f_inode;
+
+    if (f->f_flag == O_APPEND) {
+        f->f_offset = ip->i_din.di_size; // 跳到文件末尾
+    }
+
     unsigned long offset = f->f_offset;
     int total = 0;
     while (count > 0) {
