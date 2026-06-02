@@ -239,8 +239,10 @@ void save_vdisk(void) {
 void login(void) {
     char name[DIRSIZ], passwd[DIRSIZ], home_path[64];
     printf("Username: ");
+    fflush(stdout);
     scanf("%s", name);
     printf("Password: ");
+    fflush(stdout);
     scanf("%s", passwd);
     for (int i = 0; i < USERNUM; i++) {
         if (strcmp(user[i].u_name, name) == 0 && strcmp(user[i].u_passwd, passwd) == 0) {

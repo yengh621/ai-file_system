@@ -258,3 +258,16 @@ void integration_show_suggestions() {
     printf("\n");
 }
 
+void integration_start_session() {
+    printf("=== 开始优化会话 ===\n");
+    printf("正在加载学习参数...\n");
+    kfs_load_hot_files_from_ai();
+    printf("会话已启动\n");
+}
+
+void integration_end_session() {
+    printf("=== 结束优化会话 ===\n");
+    kfs_save_to_disk();
+    printf("会话已结束，数据已保存\n");
+}
+

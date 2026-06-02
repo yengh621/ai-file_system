@@ -20,19 +20,26 @@
 #define SYSOPENFILE 40
 #define NOFILE 20
 #define NHINO 128
-#define KFS_MAX_TAGS 16
-#define KFS_MAX_CAT 32
 #define WORKLOAD_HISTORY 64
 #define BEHAVIOR_HISTORY 128
+#define MAX_INODES 512
+#define BLOCK_SIZE 512
 
 #define SUPERBLOCK 1
 #define DINODESTART 2
-#define DATASTART (DINODESTART + DINODEBLK)
+#define KFS_START (DINODESTART + DINODEBLK)   /* KFS 开始块 */
+#define KFS_TAGS_BLK KFS_START               /* KFS 分类标签块 */
+#define KFS_HOT_CACHE_BLK (KFS_START + 1)   /* 热点文件索引块 */
+#define KFS_MEMORY_MAP_BLK (KFS_START + 2)  /* 内存内容文件块 */
+#define KFS_HOT_DATA_BLK (KFS_START + 3)    /* 热点文件数据起始块 */
+#define KFS_TOTAL_BLKS 32                   /* KFS 总块数 */
+#define DATASTART (KFS_START + KFS_TOTAL_BLKS)
 
 /* 权限常量 */
 #define S_IFMT   0170000  /* 文件类型掩码 */
 #define S_IFDIR  0040000  /* 目录 */
 #define S_IFREG  0100000  /* 普通文件 */
+#define S_IFLNK  0120000  /* 符号链接 */
 #define S_IRUSR  0000400  /* 所有者读 */
 #define S_IWUSR  0000200  /* 所有者写 */
 #define S_IXUSR  0000100  /* 所有者执行 */
@@ -57,7 +64,6 @@
 #define X_OK 0x1
 
 
-
 struct filsys {
     unsigned short s_isize;
     unsigned short s_fsize;
@@ -70,7 +76,12 @@ struct filsys {
     char s_fmod;
     char s_ronly;
     unsigned short s_time[2];
+    unsigned short ai_context_blk_num;
+    unsigned char ai_mount_flag;
+    unsigned short ai_log_inode_no;
 };
+
+#define ROOTDEV 0
 
 struct dinode {
     unsigned short di_mode;
@@ -111,6 +122,7 @@ struct file {
     char f_count;
     struct inode *f_inode;
     unsigned long f_offset;
+    char f_name[DIRSIZ];  /* 保存文件名用于 KFS */
 };
 
 /* 文件锁状态 */
@@ -125,42 +137,7 @@ struct file_lock {
     int read_count;          /* 读锁计数 */
 };
 
-/* === 二、组织层创新：KFS 智能文件分类 === */
-typedef enum {
-    KFS_TYPE_CODE,
-    KFS_TYPE_DOC,
-    KFS_TYPE_IMAGE,
-    KFS_TYPE_DATA,
-    KFS_TYPE_OTHER,
-    KFS_TYPE_MAX
-} KFSType;
-
-typedef enum {
-    KFS_TIME_TODAY,
-    KFS_TIME_WEEK,
-    KFS_TIME_MONTH,
-    KFS_TIME_OLD,
-    KFS_TIME_MAX
-} KFSTime;
-
-/* 文件标签结构体 */
-struct kfs_tag {
-    unsigned short ino;
-    char tags[KFS_MAX_TAGS][32];
-    int tag_count;
-    KFSType type;
-    KFSTime time_cat;
-    unsigned long last_access;
-    unsigned long created;
-};
-
-/* 虚拟目录项 */
-struct kfs_vdir_entry {
-    char name[DIRSIZ];
-    unsigned short ino;
-};
-
-/* === 三、性能层创新：AI 自适应 I/O 优化 === */
+/* === 二、性能层创新：AI 自适应 I/O 优化 === */
 typedef enum {
     WORKLOAD_SEQUENTIAL,  /* 顺序读大文件 */
     WORKLOAD_RANDOM,      /* 随机读小文件 */
@@ -176,17 +153,68 @@ struct io_request {
     unsigned long timestamp;
 };
 
-/* Workload 分析器 */
-struct workload_analyzer {
-    struct io_request history[WORKLOAD_HISTORY];
+/* 预取缓存项 */
+struct prefetch_cache_entry {
+    unsigned short ino;  /* 文件 inode */
+    int block_no;        /* 块号 */
+    unsigned char data[BLOCK_SIZE];  /* 数据 */
+    int valid;           /* 是否有效 */
+    unsigned long timestamp;  /* 加载时间 */
+};
+
+/* 预取缓存大小 */
+#define PREFETCH_CACHE_SIZE 32
+
+/* KFS 热点文件缓存大小 */
+#define HOT_FILE_CACHE_SIZE 16
+
+/* 热点文件缓存项（增强版 - 含长短期记忆） */
+struct hot_file_entry {
+    char filename[DIRSIZ];
+    unsigned short ino;
+    int access_count;
+    unsigned long last_access;
+    float long_term_score;    /* 长期评分 */
+    float short_term_score;   /* 短期评分 */
+    unsigned long first_access; /* 首次访问时间 */
+    int stored_in_kfs;         /* 是否已存储在 KFS 磁盘 */
+    int kfs_data_start_blk;    /* KFS 数据起始块 */
+    int kfs_data_blk_count;    /* KFS 数据块数 */
+};
+
+/* KFS 磁盘头部结构 */
+struct kfs_disk_header {
+    char magic[8];            /* 魔数："KFS_V1" */
+    int version;              /* 版本 */
+    int tag_count;            /* 分类标签数量 */
+    int hot_file_count;       /* 热点文件数量 */
+    unsigned long last_update; /* 最后更新时间 */
+};
+
+/* 单个文件的 IO 历史 */
+struct file_io_history {
+    unsigned short ino;              /* 文件 inode */
+    int block_history[WORKLOAD_HISTORY]; /* 访问过的块号 */
     int history_idx;
-    WorkloadType current_type;
-    int prefetch_window;  /* 预取窗口大小 */
+    WorkloadType current_type;       /* 该文件的工作负载类型 */
+    int prefetch_window;             /* 该文件的预取窗口 */
+    int last_block;                  /* 最后访问的块 */
+    int total_reads;                 /* 总读取次数 */
+};
+
+/* 全局 Workload 分析器 */
+struct workload_analyzer {
+    struct file_io_history files[MAX_INODES]; /* 每个文件的独立历史 */
+    int file_count;
+    
+    /* 全局预取缓存（按块存） */
+    struct prefetch_cache_entry cache[PREFETCH_CACHE_SIZE];
+    int cache_idx;
     int cache_hits;
     int cache_misses;
 };
 
-/* === 四、安全层创新：智能行为异常检测 === */
+/* === 三、安全层创新：智能行为异常检测 === */
 /* 用户行为记录 */
 struct user_action {
     char action[32];
@@ -269,19 +297,48 @@ void init_file_locks();
 /* AI 相关函数声明 */
 void nlp_interact(char *text);
 
-/* === 组织层创新：KFS 函数声明 === */
+/* === KFS 热点文件缓存函数声明 === */
 void init_kfs();
-void kfs_classify_file(char *filename, unsigned short ino);
-void kfs_list_virtual_dir(char *vdir_path);
-void kfs_show_tags(unsigned short ino);
+unsigned short kfs_hot_cache_lookup(char *filename);
+void kfs_hot_cache_update(char *filename, unsigned short ino);
+void kfs_hot_cache_show();
+
+/* KFS 持久化 */
+void kfs_save_to_disk();
+void kfs_load_from_disk();
+
+/* KFS AI 长短期记忆 */
+void kfs_calculate_scores(struct hot_file_entry *entry);
+void kfs_load_hot_files_from_ai();
+
+/* KFS 热点文件存储 */
+int kfs_store_hot_file(char *filename, unsigned short ino);
+int kfs_read_hot_file(char *filename, unsigned char *buf);
+int kfs_is_file_hot(char *filename);
+
+/* KFS 内存内容文件 */
+void kfs_update_memory_map();
+void kfs_show_memory_map();
+
+/* KFS 导出给 AI */
+void export_kfs_stats_to_ai();
+
+/* KFS 虚拟目录和标签 */
+void kfs_list_virtual_dir(char *vdir);
+void kfs_show_tags(int ino);
+void kfs_ai_select_hot_files();
 
 /* === 性能层创新：AI I/O 优化函数声明 === */
 void init_workload_analyzer();
 void record_io_request(unsigned short ino, int block_no, int is_read);
-void analyze_workload();
-int get_prefetch_window();
+int get_prefetch_window_for_file(unsigned short ino);
 void show_io_stats();
 void set_prefetch_window(int window);
+void export_io_stats_to_ai();
+int load_file_prefetch_window_from_ai(unsigned short ino);
+
+/* 预取缓存函数（Per-File） */
+int get_prefetched_block(unsigned short ino, int block_no, unsigned char *buf);
 
 /* === 安全层创新：行为检测函数声明 === */
 void init_security_system();
@@ -293,6 +350,18 @@ void set_security_thresholds(int delete_thresh, int modify_thresh);
 void set_delete_threshold(int threshold);
 void set_modify_threshold(int threshold);
 
+/* 获取块使用状态 */
+void print_block_status();
+
+/* === 链接系统 === */
+int link(char *oldpath, char *newpath);              /* 创建硬链接 */
+int symlink(char *oldpath, char *newpath);           /* 创建符号链接 */
+int readlink(char *path, char *buf, int bufsize);    /* 读取符号链接内容 */
+int fs_unlink(char *path);                           /* 删除链接 */
+int is_link(struct inode *ip);                       /* 判断是否是符号链接 */
+int readlink_inode(struct inode *ip, char *buf, int bufsize); /* 从 inode 读取链接 */
+struct inode* resolve_link(struct inode *ip, int *err);  /* 解析符号链接 */
+
 /* === 集成层：记忆优化集成 === */
 void init_integration();
 void integration_set_user(int uid);
@@ -300,5 +369,7 @@ void integration_clear_user();
 void integration_record_operation(char *operation, char *path);
 void integration_apply_optimization();
 void integration_show_suggestions();
+void integration_start_session();
+void integration_end_session();
 
 #endif
