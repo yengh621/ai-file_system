@@ -67,6 +67,8 @@ class AgentOrchestrator:
         self.kfs_agent.learned_params_file = learned_params_file
         self.io_agent.learned_params_file = learned_params_file
         self.security_agent.learned_params_file = learned_params_file
+        self.kfs_agent.kfs_stats_file = os.path.join(self.recorder.user_dir, "kfs_stats.json")
+        self.io_agent.io_stats_file = os.path.join(self.recorder.user_dir, "io_stats.json")
     
     def get_context(self) -> Dict:
         return self.recorder.get_context()

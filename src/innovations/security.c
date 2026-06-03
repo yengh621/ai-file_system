@@ -5,6 +5,45 @@ static struct security_event security_log[64];
 static int security_log_idx = 0;
 static int security_initialized = 0;
 
+static int parse_json_int_value(const char *json, const char *key, int fallback) {
+    const char *pos = strstr(json, key);
+    if (pos == NULL) return fallback;
+    pos = strchr(pos, ':');
+    if (pos == NULL) return fallback;
+    pos++;
+    while (*pos == ' ' || *pos == '\t' || *pos == '\r' || *pos == '\n') pos++;
+    return (int)strtol(pos, NULL, 10);
+}
+
+static int load_security_thresholds_from_ai(int *delete_thresh, int *modify_thresh) {
+    char path[256];
+    FILE *fp = NULL;
+
+    if (cur_uid >= 0) {
+        snprintf(path, sizeof(path),
+                 "debug_memory/users/%d/agent/memory/long_term/learned_params.json",
+                 cur_uid);
+        fp = fopen(path, "r");
+    }
+    if (fp == NULL) {
+        fp = fopen("debug_memory/agent/memory/long_term/learned_params.json", "r");
+    }
+    if (fp == NULL) return 0;
+
+    char buf[8192];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, fp);
+    fclose(fp);
+    buf[n] = '\0';
+
+    *delete_thresh = parse_json_int_value(buf, "\"delete_threshold\"", *delete_thresh);
+    *modify_thresh = parse_json_int_value(buf, "\"modify_threshold\"", *modify_thresh);
+    if (*delete_thresh < 5) *delete_thresh = 5;
+    if (*delete_thresh > 20) *delete_thresh = 20;
+    if (*modify_thresh < 5) *modify_thresh = 5;
+    if (*modify_thresh > 20) *modify_thresh = 20;
+    return 1;
+}
+
 void set_security_thresholds(int delete_thresh, int modify_thresh) {
     if (!security_initialized) init_security_system();
     
@@ -45,16 +84,24 @@ void init_security_system() {
     memset(profiles, 0, sizeof(profiles));
     memset(security_log, 0, sizeof(security_log));
     
+    int delete_thresh = 5;
+    int modify_thresh = 10;
+    int loaded_ai_params = load_security_thresholds_from_ai(&delete_thresh, &modify_thresh);
+
     for (int i = 0; i < USERNUM; i++) {
         profiles[i].uid = i;
-        profiles[i].delete_threshold = 5;
-        profiles[i].modify_threshold = 10;
+        profiles[i].delete_threshold = delete_thresh;
+        profiles[i].modify_threshold = modify_thresh;
     }
     
     printf("=== AI 智能安全系统初始化完成 ===\n");
     printf("异常检测阈值:\n");
-    printf("  - 每分钟删除阈值: 5 文件\n");
-    printf("  - 每分钟修改阈值: 10 文件\n");
+    printf("  - 每分钟删除阈值: %d 文件\n", delete_thresh);
+    printf("  - 每分钟修改阈值: %d 文件\n", modify_thresh);
+    if (loaded_ai_params) {
+        printf("Security thresholds loaded from learned_params.json.\n");
+    }
+    printf("Security thresholds: delete=%d modify=%d\n", delete_thresh, modify_thresh);
     security_initialized = 1;
 }
 
@@ -86,11 +133,20 @@ int detect_anomaly(char *action, char *target) {
         if (now - profile->history[i].timestamp < 60) {
             if (strcmp(profile->history[i].action, "delete") == 0) {
                 recent_deletes++;
-            } else if (strcmp(profile->history[i].action, "write") == 0 ||
+            } else if (strcmp(profile->history[i].action, "create") == 0 ||
+                       strcmp(profile->history[i].action, "write") == 0 ||
                        strcmp(profile->history[i].action, "chmod") == 0) {
                 recent_modifies++;
             }
         }
+    }
+
+    if (strcmp(action, "delete") == 0) {
+        recent_deletes++;
+    } else if (strcmp(action, "create") == 0 ||
+               strcmp(action, "write") == 0 ||
+               strcmp(action, "chmod") == 0) {
+        recent_modifies++;
     }
     
     if (strcmp(action, "delete") == 0 && recent_deletes >= profile->delete_threshold) {
@@ -98,7 +154,9 @@ int detect_anomaly(char *action, char *target) {
         is_anomaly = 1;
     }
     
-    if ((strcmp(action, "write") == 0 || strcmp(action, "chmod") == 0) &&
+    if ((strcmp(action, "create") == 0 ||
+         strcmp(action, "write") == 0 ||
+         strcmp(action, "chmod") == 0) &&
         recent_modifies >= profile->modify_threshold) {
         snprintf(description, 256, "检测到短时间内大量修改操作: %d 次/分钟", recent_modifies);
         is_anomaly = 1;
@@ -139,6 +197,9 @@ void show_user_profile() {
     printf("删除阈值: %d/分钟\n", profile->delete_threshold);
     printf("修改阈值: %d/分钟\n", profile->modify_threshold);
     
+    printf("Security thresholds: delete=%d modify=%d\n",
+           profile->delete_threshold, profile->modify_threshold);
+
     int recent_actions = 0;
     unsigned long now = (unsigned long)time(NULL);
     for (int i = 0; i < BEHAVIOR_HISTORY; i++) {

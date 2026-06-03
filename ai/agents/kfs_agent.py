@@ -19,15 +19,16 @@ class KFSAgent(BaseAgent):
     
     def _load_kfs_stats(self) -> Dict:
         """加载内核导出的 KFS 热点数据"""
-        if not os.path.exists(self.kfs_stats_file):
-            return {}
-        
-        try:
-            with open(self.kfs_stats_file, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            self.log(f"读取 KFS 统计失败: {e}")
-            return {}
+        for path in (self.kfs_stats_file, os.path.join(self.memory_dir, "kfs_stats.json")):
+            if not os.path.exists(path):
+                continue
+
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                self.log(f"读取 KFS 统计失败: {e}")
+        return {}
     
     def _load_current_params(self) -> Dict:
         """从 learned_params.json 加载当前参数"""
@@ -57,6 +58,7 @@ class KFSAgent(BaseAgent):
         # 获取当前参数和内核 KFS 统计
         current_params = self._load_current_params()
         kfs_stats = self._load_kfs_stats()
+        selected_hot_files = self._select_hot_files(kfs_stats, current_params)
         
         prompt = self._build_prompt(guidance, current_params, kfs_stats)
         
@@ -67,8 +69,9 @@ class KFSAgent(BaseAgent):
             # 解析 JSON 响应
             parsed_result = self._parse_json_response(glm_response)
             
-            # 使用解析结果或回退到当前参数
-            hot_files = parsed_result.get("hot_files", current_params.get("hot_files", []))
+            # 使用有效的模型结果；如果模型漏掉 ino，则从内核统计按文件名补回。
+            parsed_hot_files = self._normalize_hot_files(parsed_result.get("hot_files"), kfs_stats)
+            hot_files = parsed_hot_files or selected_hot_files
             reason = parsed_result.get("reason", "保持当前配置")
             
             return {
@@ -87,9 +90,76 @@ class KFSAgent(BaseAgent):
                 "error": str(e),
                 "suggestion": "保持当前 KFS 配置",
                 "parameters": {
-                    "hot_files": []
+                    "hot_files": selected_hot_files
                 }
             }
+
+    def _select_hot_files(self, kfs_stats: Dict, current_params: Dict) -> list:
+        """Pick hot files locally when GLM is unavailable or returns no list."""
+        hot_files = kfs_stats.get("hot_files", [])
+        if not hot_files:
+            return self._normalize_hot_files(current_params.get("hot_files", []), kfs_stats)
+
+        candidates = []
+        for item in hot_files:
+            if not isinstance(item, dict):
+                continue
+            filename = item.get("filename")
+            ino = item.get("ino")
+            if not filename or not ino:
+                continue
+            score = float(item.get("short_term_score", 0) or 0) + float(item.get("long_term_score", 0) or 0)
+            access_count = int(item.get("access_count", 0) or 0)
+            last_access = int(item.get("last_access", 0) or 0)
+            if item.get("stored_in_kfs") or access_count >= 1 or score > 0:
+                candidates.append((score, access_count, last_access, {"filename": filename, "ino": int(ino)}))
+
+        candidates.sort(key=lambda entry: (entry[0], entry[1], entry[2]), reverse=True)
+        return [entry[3] for entry in candidates[:4]]
+
+    def _normalize_hot_files(self, hot_files, kfs_stats: Dict) -> list:
+        """Return only KFS-storable entries and fill missing inode by filename."""
+        if not isinstance(hot_files, list):
+            return []
+
+        ino_by_name = {}
+        for item in kfs_stats.get("hot_files", []):
+            if not isinstance(item, dict):
+                continue
+            filename = item.get("filename")
+            ino = item.get("ino")
+            if not filename or not ino:
+                continue
+            try:
+                ino_by_name[str(filename)] = int(ino)
+            except (TypeError, ValueError):
+                continue
+
+        normalized = []
+        seen = set()
+        for item in hot_files:
+            if not isinstance(item, dict):
+                continue
+            filename = item.get("filename") or item.get("name") or item.get("path")
+            if not filename:
+                continue
+
+            try:
+                ino = int(item.get("ino") or 0)
+            except (TypeError, ValueError):
+                ino = 0
+            if ino <= 0:
+                ino = ino_by_name.get(str(filename), 0)
+            if ino <= 0:
+                continue
+
+            key = (str(filename), ino)
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append({"filename": str(filename), "ino": ino})
+
+        return normalized
     
     def _parse_json_response(self, response: str) -> Dict:
         """解析 GLM 返回的 JSON 响应"""

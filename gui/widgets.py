@@ -11,7 +11,12 @@ from .styles import Colors, Fonts, Layout
 
 def create_frame(parent, bg=None):
     """创建标准 Frame"""
-    return tk.Frame(parent, bg=bg or Colors.BG)
+    if bg is None:
+        try:
+            bg = parent.cget("bg")
+        except Exception:
+            bg = Colors.BG
+    return tk.Frame(parent, bg=bg)
 
 
 def create_label(parent, text, font=None, fg=None, bg=None, anchor=None):
@@ -36,7 +41,9 @@ def create_entry(parent, placeholder=""):
         relief="solid",
         bd=1,
         font=Fonts.NORMAL,
-        highlightthickness=0
+        highlightthickness=1,
+        highlightbackground=Colors.BORDER_LIGHT,
+        highlightcolor=Colors.PRIMARY
     )
     if placeholder:
         entry.insert(0, placeholder)
@@ -47,18 +54,18 @@ def create_button(parent, text, command, style="primary"):
     """创建科技风格按钮"""
     if style == "primary":
         bg_color = Colors.PRIMARY
-        fg_color = "#000000"
+        fg_color = "#ffffff"
         active_bg = Colors.PRIMARY_LIGHT
-        active_fg = "#000000"
+        active_fg = "#ffffff"
     elif style == "accent":
         bg_color = Colors.ACCENT
-        fg_color = "#ffffff"
+        fg_color = "#08342f"
         active_bg = Colors.ACCENT_LIGHT
-        active_fg = "#ffffff"
+        active_fg = "#08342f"
     else:
-        bg_color = Colors.BG_LIGHTER
+        bg_color = Colors.BG_LIGHT
         fg_color = Colors.FG
-        active_bg = Colors.BORDER
+        active_bg = Colors.BG_LIGHTER
         active_fg = Colors.FG
     
     btn = tk.Button(
@@ -68,11 +75,12 @@ def create_button(parent, text, command, style="primary"):
         bg=bg_color,
         fg=fg_color,
         font=Fonts.NORMAL,
-        relief="flat",
+        relief="solid",
+        bd=1,
         activebackground=active_bg,
         activeforeground=active_fg,
-        padx=20,
-        pady=10,
+        padx=16,
+        pady=7,
         cursor="hand2"
     )
     return btn
@@ -92,10 +100,10 @@ class SpaceUsageWidget:
         self.frame = tk.LabelFrame(
             parent,
             text=" 存储状态  ",
-            bg=Colors.BG,
+            bg=Colors.PANEL,
             fg=Colors.PRIMARY,
-            font=Fonts.NORMAL,
-            labelanchor="n",
+            font=Fonts.PANEL_TITLE,
+            labelanchor="nw",
             padx=Layout.PADDING_SMALL,
             pady=Layout.PADDING_SMALL,
             bd=1,
@@ -145,7 +153,7 @@ class SpaceUsageWidget:
 
         self.canvas = tk.Canvas(
             self.canvas_container,
-            bg=Colors.BG_LIGHT,
+            bg=Colors.PANEL,
             highlightthickness=0,
             bd=0
         )
@@ -200,7 +208,7 @@ class SpaceUsageWidget:
             self.canvas.create_rectangle(
                 x, y, x + block_size, y + block_size,
                 fill=color,
-                outline=Colors.BG,
+                outline=Colors.PANEL,
                 tags=f"block{i}"
             )
 
@@ -213,6 +221,15 @@ class SpaceUsageWidget:
         self.percent_label.config(text=f"{used_percent:.2f}%")
         self.meta_label.config(text=f"Metadata: {used_inodes} inodes / {inode_bytes} B")
 
+        self.draw_blocks()
+
+    def clear(self):
+        """Clear disk usage details for logged-out sessions."""
+        self.blocks = [False] * 512
+        self.used_val.config(text="0 B")
+        self.total_val.config(text="0 B")
+        self.percent_label.config(text="0%")
+        self.meta_label.config(text="Metadata: 0 inodes / 0 B")
         self.draw_blocks()
 
     def _format_size(self, size_bytes):
@@ -231,10 +248,10 @@ class LogWidget:
         self.frame = tk.LabelFrame(
             parent,
             text=" 系统日志  ",
-            bg=Colors.BG,
+            bg=Colors.PANEL,
             fg=Colors.PRIMARY,
-            font=Fonts.NORMAL,
-            labelanchor="n",
+            font=Fonts.PANEL_TITLE,
+            labelanchor="nw",
             padx=Layout.PADDING_SMALL,
             pady=Layout.PADDING_SMALL,
             bd=1,
@@ -243,17 +260,19 @@ class LogWidget:
 
         self.text = tk.Text(
             self.frame,
-            height=12,
-            bg=Colors.BG_LIGHT,
-            fg=Colors.FG,
-            font=Fonts.MONO,
+            height=8,
+            bg=Colors.PANEL,
+            fg=Colors.FG_MUTED,
+            font=Fonts.TEXT,
             bd=0,
             relief="flat",
             wrap="word"
         )
+        self.text.configure(selectbackground=Colors.BG_LIGHTER, selectforeground=Colors.FG)
+        self.text.tag_configure("analysis_title", foreground=Colors.PRIMARY_DARK, font=Fonts.HEADER, spacing3=8)
         self.text.pack(fill=tk.BOTH, expand=True)
 
-        scrollbar = tk.Scrollbar(self.text, orient="vertical", command=self.text.yview, bg=Colors.BG_LIGHTER, troughcolor=Colors.BG)
+        scrollbar = tk.Scrollbar(self.text, orient="vertical", command=self.text.yview, bg=Colors.BG_LIGHTER, troughcolor=Colors.PANEL)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.text.configure(yscrollcommand=scrollbar.set)
 
@@ -268,38 +287,52 @@ class ContentViewer:
     """科技风格内容查看组件"""
 
     def __init__(self, parent):
-        self.frame = tk.LabelFrame(
+        self.frame = tk.Frame(
             parent,
-            text=" 智能体分析  ",
-            bg=Colors.BG,
-            fg=Colors.PRIMARY,
-            font=Fonts.NORMAL,
-            labelanchor="n",
+            bg=Colors.PANEL,
             padx=Layout.PADDING_SMALL,
             pady=Layout.PADDING_SMALL,
-            bd=1,
-            relief="solid"
+            bd=0,
+            relief="flat"
         )
+
+        self.title_label = tk.Label(
+            self.frame,
+            text="智能体分析",
+            bg=Colors.BG_LIGHTER,
+            fg=Colors.PRIMARY_DARK,
+            font=Fonts.PANEL_TITLE,
+            padx=10,
+            pady=3,
+            anchor="w"
+        )
+        self.title_label.pack(anchor="w", pady=(0, 8))
 
         self.text = tk.Text(
             self.frame,
-            height=16,
-            bg=Colors.BG_LIGHT,
+            height=12,
+            bg=Colors.PANEL,
             fg=Colors.FG,
-            font=Fonts.MONO,
+            font=Fonts.TEXT,
             bd=0,
             relief="flat",
             wrap="word"
         )
+        self.text.configure(selectbackground=Colors.BG_LIGHTER, selectforeground=Colors.FG)
         self.text.pack(fill=tk.BOTH, expand=True)
 
-        scrollbar = tk.Scrollbar(self.text, orient="vertical", command=self.text.yview, bg=Colors.BG_LIGHTER, troughcolor=Colors.BG)
+        scrollbar = tk.Scrollbar(self.text, orient="vertical", command=self.text.yview, bg=Colors.BG_LIGHTER, troughcolor=Colors.PANEL)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.text.configure(yscrollcommand=scrollbar.set)
 
     def set_content(self, content):
         self.text.delete(1.0, tk.END)
         if content:
+            title = "多智能体分析报告\n"
+            if content.startswith(title):
+                self.text.insert(tk.END, title, "analysis_title")
+                self.text.insert(tk.END, content[len(title):])
+                return
             self.text.insert(tk.END, content)
 
 
@@ -310,10 +343,10 @@ class AgentPanel:
         self.frame = tk.LabelFrame(
             parent,
             text=" 智能体参数  ",
-            bg=Colors.BG,
-            fg=Colors.ACCENT,
-            font=Fonts.NORMAL,
-            labelanchor="n",
+            bg=Colors.PANEL,
+            fg=Colors.PRIMARY,
+            font=Fonts.PANEL_TITLE,
+            labelanchor="nw",
             padx=Layout.PADDING_SMALL,
             pady=Layout.PADDING_SMALL,
             bd=1,
@@ -322,103 +355,84 @@ class AgentPanel:
         
         # IO Agent
         self.io_frame = create_frame(self.frame)
-        self.io_frame.pack(fill=tk.X, pady=(0, 8))
+        self.io_frame.pack(fill=tk.X, pady=(0, 6))
         
-        create_label(self.io_frame, "🤖 IO Agent", font=Fonts.SUBTITLE, fg=Colors.PRIMARY).pack(anchor="w")
-        self.io_param_label = create_label(self.io_frame, "预取窗口: 3", font=Fonts.NORMAL, fg=Colors.FG_MUTED)
-        self.io_param_label.pack(anchor="w", padx=8)
-        self.io_desc_label = create_label(self.io_frame, "顺序访问多时调大，随机访问多时调小", font=Fonts.SMALL, fg=Colors.FG_DIM)
-        self.io_desc_label.pack(anchor="w", padx=8)
-        
+        create_label(self.io_frame, "🤖 IO Agent", font=Fonts.BODY, fg=Colors.PRIMARY).pack(anchor="w")
+        self.io_param_label = create_label(self.io_frame, "预取窗口: 3", font=Fonts.BODY_SMALL, fg=Colors.FG_MUTED)
+        self.io_param_label.pack(anchor="w", padx=10, pady=(2, 0))
         # Security Agent
         self.security_frame = create_frame(self.frame)
-        self.security_frame.pack(fill=tk.X, pady=(8, 8))
+        self.security_frame.pack(fill=tk.X, pady=(6, 6))
         
-        create_label(self.security_frame, "🛡️ Security Agent", font=Fonts.SUBTITLE, fg=Colors.PRIMARY).pack(anchor="w")
-        self.security_delete_label = create_label(self.security_frame, "删除阈值: 5", font=Fonts.NORMAL, fg=Colors.FG_MUTED)
-        self.security_delete_label.pack(anchor="w", padx=8)
-        self.security_modify_label = create_label(self.security_frame, "修改阈值: 10", font=Fonts.NORMAL, fg=Colors.FG_MUTED)
-        self.security_modify_label.pack(anchor="w", padx=8)
+        create_label(self.security_frame, "🛡️ Security Agent", font=Fonts.BODY, fg=Colors.PRIMARY).pack(anchor="w")
+        self.security_delete_label = create_label(self.security_frame, "删除阈值: 5", font=Fonts.BODY_SMALL, fg=Colors.FG_MUTED)
+        self.security_delete_label.pack(anchor="w", padx=10, pady=(2, 0))
+        self.security_modify_label = create_label(self.security_frame, "修改阈值: 10", font=Fonts.BODY_SMALL, fg=Colors.FG_MUTED)
+        self.security_modify_label.pack(anchor="w", padx=10)
         
         # KFS Agent
         self.kfs_frame = create_frame(self.frame)
-        self.kfs_frame.pack(fill=tk.X, pady=(8, 0))
+        self.kfs_frame.pack(fill=tk.X, pady=(6, 0))
         
-        create_label(self.kfs_frame, "📁 KFS Agent", font=Fonts.SUBTITLE, fg=Colors.PRIMARY).pack(anchor="w")
-        self.kfs_tag_label = create_label(self.kfs_frame, "自动标签: 启用", font=Fonts.NORMAL, fg=Colors.FG_MUTED)
-        self.kfs_tag_label.pack(anchor="w", padx=8)
-        self.kfs_rules_label = create_label(self.kfs_frame, "分类规则: []", font=Fonts.NORMAL, fg=Colors.FG_MUTED)
-        self.kfs_rules_label.pack(anchor="w", padx=8)
-    
-        self.kfs_hot_label = create_label(self.kfs_frame, "Hot files: []", font=Fonts.SMALL, fg=Colors.FG_DIM)
-        self.kfs_hot_label.pack(anchor="w", padx=8)
-
-    def update_parameters(self, params):
-        """更新参数显示"""
-        # IO Agent 参数
-        if "prefetch_window" in params:
-            self.io_param_label.config(text=f"预取窗口: {params['prefetch_window']}")
-        elif "file_prefetch_windows" in params:
-            # 处理按文件预取窗口格式
-            windows = params["file_prefetch_windows"]
-            if isinstance(windows, dict) and windows:
-                avg_window = sum(windows.values()) // len(windows)
-                self.io_param_label.config(text=f"预取窗口: {avg_window} (按文件)")
-            else:
-                self.io_param_label.config(text=f"预取窗口: 3 (默认)")
-        
-        # Security Agent 参数
-        if "delete_threshold" in params:
-            self.security_delete_label.config(text=f"删除阈值: {params['delete_threshold']}")
-        if "modify_threshold" in params:
-            self.security_modify_label.config(text=f"修改阈值: {params['modify_threshold']}")
-        
-        # KFS Agent 参数
-        if "auto_tagging_enabled" in params:
-            status = "启用" if params["auto_tagging_enabled"] else "禁用"
-            self.kfs_tag_label.config(text=f"自动标签: {status}")
-        if "hot_files" in params:
-            hot_count = len(params["hot_files"])
-            self.kfs_rules_label.config(text=f"热点文件: {hot_count} 个")
-        elif "category_rules" in params:
-            rules_str = str(params["category_rules"])[:50] + "..." if len(str(params["category_rules"])) > 50 else str(params["category_rules"])
-            self.kfs_rules_label.config(text=f"分类规则: {rules_str}")
-
+        create_label(self.kfs_frame, "📁 KFS Agent", font=Fonts.BODY, fg=Colors.PRIMARY).pack(anchor="w")
+        self.kfs_hot_label = create_label(self.kfs_frame, "热点文件: []", font=Fonts.BODY_SMALL, fg=Colors.FG_MUTED)
+        self.kfs_hot_label.pack(anchor="w", padx=10, pady=(2, 0))
 
     def update_parameters(self, params):
         """Update the panel with actual agent parameters."""
+        params = self._normalize_parameters(params)
         if "prefetch_window" in params:
             self.io_param_label.config(text=f"预取窗口: {params['prefetch_window']}")
-            self.io_desc_label.config(text=f"Actual windows: {params['prefetch_window']}")
         elif "file_prefetch_windows" in params:
             windows = params["file_prefetch_windows"]
             if isinstance(windows, dict) and windows:
                 avg_window = sum(windows.values()) // len(windows)
                 self.io_param_label.config(text=f"预取窗口: {avg_window} (per-file)")
-                pairs = [f"{key}:{value}" for key, value in list(windows.items())[:6]]
-                self.io_desc_label.config(text=f"Actual windows: {', '.join(pairs)}")
             else:
                 self.io_param_label.config(text="预取窗口: 3 (default)")
-                self.io_desc_label.config(text="Actual windows: {}")
 
         if "delete_threshold" in params:
             self.security_delete_label.config(text=f"删除阈值: {params['delete_threshold']}")
         if "modify_threshold" in params:
             self.security_modify_label.config(text=f"修改阈值: {params['modify_threshold']}")
 
-        if "auto_tagging_enabled" in params:
-            status = "启用" if params["auto_tagging_enabled"] else "禁用"
-            self.kfs_tag_label.config(text=f"自动标签: {status}")
-
-        if "category_rules" in params:
-            rules_str = str(params["category_rules"])[:50] + "..." if len(str(params["category_rules"])) > 50 else str(params["category_rules"])
-            self.kfs_rules_label.config(text=f"分类规则: {rules_str}")
-
         if "hot_files" in params:
-            hot_preview = ", ".join(str(item) for item in params["hot_files"][:4]) if params["hot_files"] else "[]"
-            self.kfs_hot_label.config(text=f"Hot files: {hot_preview}")
+            hot_preview = self._format_hot_files(params["hot_files"])
+            self.kfs_hot_label.config(text=f"热点文件: {hot_preview}")
         else:
-            self.kfs_hot_label.config(text="Hot files: []")
+            self.kfs_hot_label.config(text="热点文件: []")
+
+    def _normalize_parameters(self, data):
+        """Accept both raw params and full analysis result dictionaries."""
+        if not isinstance(data, dict):
+            return {}
+        if isinstance(data.get("parameters"), dict):
+            return data["parameters"]
+        learned_params = data.get("learned_params")
+        if isinstance(learned_params, dict):
+            return self._normalize_parameters(learned_params)
+
+        params = {}
+        for key in ("io_result", "security_result", "kfs_result"):
+            result_params = data.get(key, {}).get("parameters", {})
+            if isinstance(result_params, dict):
+                params.update(result_params)
+        return params or data
+
+    def _format_hot_files(self, hot_files):
+        if not hot_files:
+            return "[]"
+
+        preview = []
+        for item in hot_files[:4]:
+            if isinstance(item, dict):
+                name = item.get("filename") or item.get("name") or item.get("path") or str(item)
+                access_count = item.get("access_count")
+                preview.append(f"{name}({access_count})" if access_count is not None else str(name))
+            else:
+                preview.append(str(item))
+        suffix = "..." if len(hot_files) > 4 else ""
+        return ", ".join(preview) + suffix
 
 
 class FileTreeWidget:
@@ -434,10 +448,10 @@ class FileTreeWidget:
         self.frame = tk.LabelFrame(
             parent,
             text=" 📁 目录结构  ",
-            bg=Colors.BG,
+            bg=Colors.PANEL,
             fg=Colors.PRIMARY,
-            font=Fonts.NORMAL,
-            labelanchor="n",
+            font=Fonts.PANEL_TITLE,
+            labelanchor="nw",
             padx=Layout.PADDING_SMALL,
             pady=Layout.PADDING_SMALL,
             bd=1,
@@ -450,13 +464,20 @@ class FileTreeWidget:
         
         # 设置样式
         style = ttk.Style()
-        style.configure("Treeview", 
-                       background=Colors.BG_LIGHT,
+        style.configure("Treeview",
+                       background=Colors.PANEL,
                        foreground=Colors.FG,
-                       fieldbackground=Colors.BG_LIGHT)
+                       fieldbackground=Colors.PANEL,
+                       rowheight=26,
+                       borderwidth=0,
+                       font=Fonts.NORMAL)
+        style.map("Treeview",
+                  background=[("selected", Colors.BG_LIGHTER)],
+                  foreground=[("selected", Colors.PRIMARY_DARK)])
         style.configure("Treeview.Heading",
-                       background=Colors.BG,
-                       foreground=Colors.PRIMARY)
+                       background=Colors.PANEL,
+                       foreground=Colors.PRIMARY,
+                       font=Fonts.HEADER)
         
         # 绑定点击事件
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
@@ -525,6 +546,10 @@ class FileTreeWidget:
             if not line or line.startswith("Directory contents") or line.startswith("$"):
                 continue
             
+            # 只解析符合格式的行：以 d/l/- 开头，后面跟着名称和 (ino: ...)
+            if not (line.startswith('d ') or line.startswith('- ') or line.startswith('l ')):
+                continue
+            
             # 解析格式: "d usr (ino: 2)" 或 "- test.txt (ino: 3)" 或 "d . (ino: 65520, links: 2)"
             if ' ' in line:
                 parts = line.split(' ', 1)
@@ -541,6 +566,7 @@ class FileTreeWidget:
                         name = rest[:rest.index('(')].strip()
                     else:
                         name = rest.strip()
+                    name = name.replace("[KFS]", "").strip()
                     
                     # 跳过空名称和 . ..
                     if not name or name == '.' or name == '..':
@@ -572,6 +598,9 @@ class FileTreeWidget:
 
     def clear(self):
         """清空树"""
+        self.current_path = "/"
+        self.tree.item(self.root_node, text="/", open=True)
+        self.item_meta = {self.root_node: {"name": "/", "type": "dir", "path": "/"}}
         for child in self.tree.get_children(self.root_node):
             self.tree.delete(child)
 
@@ -583,10 +612,10 @@ class CallLogViewer:
         self.frame = tk.LabelFrame(
             parent,
             text=" 调用记录  ",
-            bg=Colors.BG,
-            fg=Colors.SUCCESS,
-            font=Fonts.NORMAL,
-            labelanchor="n",
+            bg=Colors.PANEL,
+            fg=Colors.ACCENT,
+            font=Fonts.PANEL_TITLE,
+            labelanchor="nw",
             padx=Layout.PADDING_SMALL,
             pady=Layout.PADDING_SMALL,
             bd=1,
@@ -595,17 +624,18 @@ class CallLogViewer:
         
         self.text = tk.Text(
             self.frame,
-            height=8,
-            bg=Colors.BG_LIGHT,
-            fg=Colors.FG,
-            font=Fonts.SMALL,
+            height=7,
+            bg=Colors.PANEL,
+            fg=Colors.FG_MUTED,
+            font=Fonts.BODY_SMALL,
             bd=0,
             relief="flat",
             wrap="word"
         )
+        self.text.configure(selectbackground=Colors.BG_LIGHTER, selectforeground=Colors.FG)
         self.text.pack(fill=tk.BOTH, expand=True)
         
-        scrollbar = tk.Scrollbar(self.text, orient="vertical", command=self.text.yview, bg=Colors.BG_LIGHTER, troughcolor=Colors.BG)
+        scrollbar = tk.Scrollbar(self.text, orient="vertical", command=self.text.yview, bg=Colors.BG_LIGHTER, troughcolor=Colors.PANEL)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.text.configure(yscrollcommand=scrollbar.set)
     

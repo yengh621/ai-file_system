@@ -109,8 +109,6 @@
 ```
 用户操作
    ↓
-NLP 解析 (glm_integration.py)
-   ↓
 命令执行
    ↓
 行为记录 → 记忆优化器 (memory_optimizer.py)

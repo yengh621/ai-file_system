@@ -69,16 +69,23 @@ class AIIntegration:
         
         # 执行分析
         result = self.orchestrator.run_full_analysis()
-        
-        # 保存分析结果
+
+        # The orchestrator saves the canonical learned_params shape. Keep this
+        # recorder in sync without overwriting it with the outer result wrapper.
         if result.get("status") == "success":
-            self.recorder.save_full_analysis(result)
+            learned_params = result.get("learned_params")
+            if isinstance(learned_params, dict) and isinstance(learned_params.get("parameters"), dict):
+                self.recorder.learned_params = learned_params
+            else:
+                self.recorder._load_all()
         
         return result
     
     def get_current_params(self):
         """获取当前学习参数"""
-        return self.recorder.get_current_params()
+        self.recorder._load_all()
+        params = self._extract_parameters(self.recorder.learned_params)
+        return params or self.recorder.get_current_params()
     
     def get_agent_calls(self):
         """获取智能体调用记录"""
@@ -99,10 +106,52 @@ class AIIntegration:
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 if isinstance(data, dict):
-                    return data
+                    return self._extract_analysis(data)
         except Exception as e:
             print(f"[AI Integration] failed to read last analysis: {e}")
         return None
+
+    def _extract_analysis(self, data):
+        """Return a canonical learned analysis from current or legacy shapes."""
+        if not isinstance(data, dict):
+            return None
+        if isinstance(data.get("parameters"), dict):
+            return data
+        learned_params = data.get("learned_params")
+        if isinstance(learned_params, dict) and isinstance(learned_params.get("parameters"), dict):
+            return learned_params
+
+        params = self._extract_parameters(data)
+        if not params:
+            return data
+        return {
+            "uid": data.get("uid", self.current_uid),
+            "timestamp": data.get("timestamp", data.get("last_updated", "")),
+            "behavior_pattern": data.get("behavior_pattern", ""),
+            "kfs_suggestion": data.get("kfs_suggestion", data.get("kfs_result", {}).get("suggestion", "")),
+            "io_suggestion": data.get("io_suggestion", data.get("io_result", {}).get("suggestion", "")),
+            "security_suggestion": data.get("security_suggestion", data.get("security_result", {}).get("suggestion", "")),
+            "parameters": params,
+        }
+
+    def _extract_parameters(self, data):
+        """Extract flattened agent parameters from saved or live analysis data."""
+        if not isinstance(data, dict):
+            return {}
+        if isinstance(data.get("parameters"), dict):
+            return data["parameters"]
+        learned_params = data.get("learned_params")
+        if isinstance(learned_params, dict):
+            nested = self._extract_parameters(learned_params)
+            if nested:
+                return nested
+
+        params = {}
+        for key in ("io_result", "security_result", "kfs_result"):
+            result_params = data.get(key, {}).get("parameters", {})
+            if isinstance(result_params, dict):
+                params.update(result_params)
+        return params
 
     def run_security_check(self):
         """Run the periodic security check for the active user."""

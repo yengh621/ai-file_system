@@ -6,7 +6,7 @@ TARGET=filesystem
 CORE_OBJS=main.o disk.o inode.o block.o directory.o file.o user.o permission.o ai.o
 
 # Innovations object files
-INNOVATIONS_OBJS=kfs.o io_optimizer.o security.o link.o
+INNOVATIONS_OBJS=kfs.o io_optimizer.o security.o link.o file_ops.o
 
 OBJS=$(addprefix build/,$(CORE_OBJS) $(INNOVATIONS_OBJS))
 

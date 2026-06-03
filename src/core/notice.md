@@ -100,7 +100,6 @@
 1. **KFS 智能标签分类** (如 `init_kfs`, `kfs_show_tags`)
 2. **AI 自适应 I/O 优化** (如 `init_io_opt`, `record_io_request`)
 3. **安全异常行为检测** (如 `init_security_system`, `user_profile`)
-4. **NLP 自然语言交互** (`nlp_interact`)
 
 这表明这个项目在经典的 UNIX 文件系统之上，**预留了用于 AI 和现代智能管理的 Hooks（钩子）**。通过在普通的文件读写（如 read、write、delete）过程中植入埋点统计，系统试图实现一个具备自适应缓存预测和异常拦截的“智能虚拟文件系统”。
 

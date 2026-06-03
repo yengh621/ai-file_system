@@ -22,6 +22,28 @@ int get_current_user_gid(void) {
     return 100;
 }
 
+static void clear_inode_cache(void) {
+    for (int i = 0; i < NHINO; i++) {
+        struct inode *current = inode[i];
+        while (current != NULL) {
+            struct inode *next = current->i_forw;
+            free(current);
+            current = next;
+        }
+        inode[i] = NULL;
+    }
+}
+
+static void reset_open_file_state(void) {
+    for (int i = 0; i < NOFILE; i++) {
+        u_ofile[i] = -1;
+    }
+    for (int i = 0; i < SYSOPENFILE; i++) {
+        memset(&sysopenfile[i], 0, sizeof(sysopenfile[i]));
+    }
+    init_file_locks();
+}
+
 /* 辅助函数：在指定目录中创建新目录 */
 static void create_dir_in(struct inode *parent, char *name, int uid, int gid, int mode) {
     unsigned long filesize = parent->i_din.di_size;
@@ -48,6 +70,7 @@ static void create_dir_in(struct inode *parent, char *name, int uid, int gid, in
     ip->i_din.di_gid = gid;
     ip->i_din.di_nlink = 2;
     ip->i_din.di_size = 32;
+    memset(ip->i_din.di_addr, 0, sizeof(ip->i_din.di_addr));
     
     int bn = balloc();
     if (bn == 0) {
@@ -92,6 +115,10 @@ static void create_dir_in(struct inode *parent, char *name, int uid, int gid, in
 
 void format(void) {
     int i, j;
+    clear_inode_cache();
+    reset_open_file_state();
+    cur_dir = 1;
+
     memset(block_buf, 0, BLOCKSIZ);
     for (i = 0; i < DATASTART + FILEBLK; i++) {
         bwrite(i, block_buf);
@@ -128,6 +155,7 @@ void format(void) {
     root_dir->i_din.di_gid = 0;
     root_dir->i_din.di_nlink = 1;
     root_dir->i_din.di_size = 32;
+    memset(root_dir->i_din.di_addr, 0, sizeof(root_dir->i_din.di_addr));
     int bn = balloc();
     root_dir->i_din.di_addr[0] = bn;
     memset(block_buf, 0, BLOCKSIZ);
@@ -273,6 +301,15 @@ void login(void) {
                 sprintf(home_path, "/usr/%s", user[i].u_name);
                 struct inode *home_dir = namei(home_path);
                 if (home_dir != NULL) {
+                    if (is_directory(home_dir) &&
+                        (home_dir->i_din.di_uid != user[i].u_uid ||
+                         home_dir->i_din.di_gid != user[i].u_gid ||
+                         (home_dir->i_din.di_mode & 0777) != 0755)) {
+                        home_dir->i_din.di_uid = user[i].u_uid;
+                        home_dir->i_din.di_gid = user[i].u_gid;
+                        home_dir->i_din.di_mode = S_IFDIR | 0755;
+                        home_dir->i_flag |= 1;
+                    }
                     cur_dir = home_dir->i_ino;
                     iput(home_dir);
                 } else {
@@ -359,6 +396,7 @@ void mkdir(char *name) {
     ip->i_din.di_gid = get_current_user_gid();
     ip->i_din.di_nlink = 2;
     ip->i_din.di_size = 32;
+    memset(ip->i_din.di_addr, 0, sizeof(ip->i_din.di_addr));
     int bn = balloc();
     ip->i_din.di_addr[0] = bn;
     memset(block_buf, 0, BLOCKSIZ);
@@ -470,9 +508,12 @@ void rmdir(char *name) {
         int dbn = bmap(ip, j);
         if (dbn != 0) bfree(dbn);
     }
-    ifree(ino);
-    
+    ip->i_din.di_mode = 0;
+    ip->i_din.di_size = 0;
+    memset(ip->i_din.di_addr, 0, sizeof(ip->i_din.di_addr));
+    ip->i_flag |= 1;
     iput(ip);
+    ifree(ino);
     dip->i_din.di_nlink--;
     iput(dip);
     

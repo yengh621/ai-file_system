@@ -3,11 +3,161 @@
 static struct workload_analyzer workload;
 static int workload_initialized = 0;
 
+static void ensure_ai_stats_dirs(void) {
+    char command[256];
+
+    if (cur_uid != -1) {
+#ifdef _WIN32
+        snprintf(command, sizeof(command), "mkdir debug_memory\\users\\%d >NUL 2>NUL", cur_uid);
+#else
+        snprintf(command, sizeof(command), "mkdir -p debug_memory/users/%d >/dev/null 2>&1", cur_uid);
+#endif
+    } else {
+#ifdef _WIN32
+        snprintf(command, sizeof(command), "mkdir debug_memory >NUL 2>NUL");
+#else
+        snprintf(command, sizeof(command), "mkdir -p debug_memory >/dev/null 2>&1");
+#endif
+    }
+    system(command);
+}
+
+static void get_io_stats_path(char *path, size_t size) {
+    if (cur_uid != -1) {
+        snprintf(path, size, "debug_memory/users/%d/io_stats.json", cur_uid);
+    } else {
+        snprintf(path, size, "debug_memory/io_stats.json");
+    }
+}
+
+static const char* workload_type_to_text(WorkloadType type) {
+    if (type == WORKLOAD_SEQUENTIAL) return "sequential";
+    if (type == WORKLOAD_RANDOM) return "random";
+    if (type == WORKLOAD_STREAM) return "stream";
+    return "unknown";
+}
+
+static WorkloadType workload_type_from_text(const char *line) {
+    if (strstr(line, "sequential")) return WORKLOAD_SEQUENTIAL;
+    if (strstr(line, "random")) return WORKLOAD_RANDOM;
+    if (strstr(line, "stream")) return WORKLOAD_STREAM;
+    return WORKLOAD_UNKNOWN;
+}
+
+static int json_line_int(const char *line) {
+    const char *colon = strchr(line, ':');
+    if (!colon) return 0;
+    return atoi(colon + 1);
+}
+
+static void reset_block_history(struct file_io_history *fh) {
+    for (int i = 0; i < WORKLOAD_HISTORY; i++) {
+        fh->block_history[i] = -1;
+    }
+}
+
+static void analyze_file_history(struct file_io_history *fh, int *seq_count, int *rand_count, int *total) {
+    *seq_count = 0;
+    *rand_count = 0;
+    *total = 0;
+
+    for (int i = 1; i < WORKLOAD_HISTORY; i++) {
+        int prev_idx = (fh->history_idx - i - 1 + WORKLOAD_HISTORY) % WORKLOAD_HISTORY;
+        int curr_idx = (fh->history_idx - i + WORKLOAD_HISTORY) % WORKLOAD_HISTORY;
+        int prev_blk = fh->block_history[prev_idx];
+        int curr_blk = fh->block_history[curr_idx];
+
+        if (prev_blk < 0 || curr_blk < 0) continue;
+
+        int diff = curr_blk - prev_blk;
+        if (diff == 1) {
+            (*seq_count)++;
+        } else if (abs(diff) > 1) {
+            (*rand_count)++;
+        }
+        (*total)++;
+    }
+}
+
+static void load_io_stats_from_file(const char *path) {
+    FILE *f = fopen(path, "r");
+    char line[512];
+    struct file_io_history pending;
+    int in_file = 0;
+    int loaded_files = 0;
+
+    if (!f) return;
+
+    memset(&workload, 0, sizeof(workload));
+    memset(&pending, 0, sizeof(pending));
+    reset_block_history(&pending);
+    pending.last_block = -1;
+    pending.prefetch_window = 3;
+
+    while (fgets(line, sizeof(line), f)) {
+        if (strstr(line, "\"cache_hits\"")) {
+            workload.cache_hits = json_line_int(line);
+        } else if (strstr(line, "\"cache_misses\"")) {
+            workload.cache_misses = json_line_int(line);
+        } else if (strstr(line, "    {") && strstr(line, "\"ino\"") == NULL) {
+            memset(&pending, 0, sizeof(pending));
+            reset_block_history(&pending);
+            pending.last_block = -1;
+            pending.prefetch_window = 3;
+            pending.current_type = WORKLOAD_UNKNOWN;
+            in_file = 1;
+        }
+
+        if (in_file) {
+            if (strstr(line, "\"ino\"")) {
+                pending.ino = (unsigned short)json_line_int(line);
+            } else if (strstr(line, "\"total_reads\"")) {
+                pending.total_reads = json_line_int(line);
+            } else if (strstr(line, "\"type\"")) {
+                pending.current_type = workload_type_from_text(line);
+            } else if (strstr(line, "\"current_prefetch_window\"")) {
+                pending.prefetch_window = json_line_int(line);
+                if (pending.prefetch_window < 1) pending.prefetch_window = 1;
+                if (pending.prefetch_window > 10) pending.prefetch_window = 10;
+            } else if (strstr(line, "\"last_block\"")) {
+                pending.last_block = json_line_int(line);
+            } else if (strstr(line, "}")) {
+                if (pending.ino != 0 && loaded_files < MAX_INODES) {
+                    workload.files[loaded_files++] = pending;
+                }
+                in_file = 0;
+            }
+        }
+    }
+
+    fclose(f);
+    workload.file_count = loaded_files;
+}
+
+static void load_io_stats_from_disk(void) {
+    char path[256];
+
+    get_io_stats_path(path, sizeof(path));
+    load_io_stats_from_file(path);
+    if (workload.file_count == 0 && workload.cache_hits == 0 && workload.cache_misses == 0) {
+        load_io_stats_from_file("debug_memory/io_stats.json");
+    }
+
+    for (int i = 0; i < MAX_INODES; i++) {
+        if (workload.files[i].ino != 0) {
+            workload.files[i].prefetch_window = load_file_prefetch_window_from_ai(workload.files[i].ino);
+        }
+    }
+}
+
 /* 导出全局和每个文件的 IO 统计数据到 JSON 文件，供 AI Agent 使用 */
 void export_io_stats_to_ai() {
+    char path[256];
     if (!workload_initialized) return;
     
-    FILE* f = fopen("debug_memory/io_stats.json", "w");
+    ensure_ai_stats_dirs();
+    get_io_stats_path(path, sizeof(path));
+    FILE* f = fopen(path, "w");
     if (!f) return;
     
     /* 统计全局信息 */
@@ -47,19 +197,25 @@ void export_io_stats_to_ai() {
         if (workload.files[i].ino == 0) continue;
         
         struct file_io_history* fh = &workload.files[i];
+        int seq_count = 0;
+        int rand_count = 0;
+        int transition_count = 0;
         
         if (!first_file) fprintf(f, ",\n");
         first_file = 0;
         
-        const char* type_str = "unknown";
-        if (fh->current_type == WORKLOAD_SEQUENTIAL) type_str = "sequential";
-        else if (fh->current_type == WORKLOAD_RANDOM) type_str = "random";
+        const char* type_str = workload_type_to_text(fh->current_type);
+        analyze_file_history(fh, &seq_count, &rand_count, &transition_count);
         
         fprintf(f, "    {\n");
         fprintf(f, "      \"ino\": %d,\n", fh->ino);
         fprintf(f, "      \"total_reads\": %d,\n", fh->total_reads);
         fprintf(f, "      \"type\": \"%s\",\n", type_str);
-        fprintf(f, "      \"current_prefetch_window\": %d\n", fh->prefetch_window);
+        fprintf(f, "      \"sequential_transitions\": %d,\n", seq_count);
+        fprintf(f, "      \"random_transitions\": %d,\n", rand_count);
+        fprintf(f, "      \"transition_count\": %d,\n", transition_count);
+        fprintf(f, "      \"current_prefetch_window\": %d,\n", fh->prefetch_window);
+        fprintf(f, "      \"last_block\": %d\n", fh->last_block);
         fprintf(f, "    }");
     }
     
@@ -89,7 +245,7 @@ static struct file_io_history* get_file_history(unsigned short ino) {
             fh->prefetch_window = 3;
             fh->last_block = -1;
             fh->total_reads = 0;
-            memset(fh->block_history, 0, sizeof(fh->block_history));
+            reset_block_history(fh);
             workload.file_count++;
             return fh;
         }
@@ -172,6 +328,7 @@ void init_workload_analyzer() {
     printf("=== AI 自适应 I/O 优化初始化完成 (Per-File) ===\n");
     printf("现在每个文件有独立的 IO 历史和预取窗口\n");
     workload_initialized = 1;
+    load_io_stats_from_disk();
     export_io_stats_to_ai();
 }
 
@@ -193,46 +350,32 @@ void record_io_request(unsigned short ino, int block_no, int is_read) {
     
     if (is_read) fh->total_reads++;
     
-    /* 分析该文件的工作负载 */
     int seq_count = 0;
     int rand_count = 0;
     int total = 0;
-    
-    for (int i = 1; i < WORKLOAD_HISTORY; i++) {
-        int prev_idx = (fh->history_idx - i - 1 + WORKLOAD_HISTORY) % WORKLOAD_HISTORY;
-        int curr_idx = (fh->history_idx - i + WORKLOAD_HISTORY) % WORKLOAD_HISTORY;
-        
-        int prev_blk = fh->block_history[prev_idx];
-        int curr_blk = fh->block_history[curr_idx];
-        
-        if (prev_blk == 0 || curr_blk == 0) continue;
-        
-        int diff = curr_blk - prev_blk;
-        if (diff == 1) {
-            seq_count++;
-        } else if (abs(diff) > 1) {
-            rand_count++;
-        }
-        total++;
-    }
-    
-    if (total < 5) {
+
+    analyze_file_history(fh, &seq_count, &rand_count, &total);
+
+    if (total == 0) {
         fh->current_type = WORKLOAD_UNKNOWN;
         fh->prefetch_window = ai_window;
         export_io_stats_to_ai();
         return;
     }
     
-    if (seq_count > rand_count * 2) {
+    if (seq_count >= rand_count * 2 && seq_count > 0) {
         fh->current_type = WORKLOAD_SEQUENTIAL;
         fh->prefetch_window = ai_window;
-    } else if (rand_count > seq_count * 2) {
+    } else if (rand_count >= seq_count * 2 && rand_count > 0) {
         fh->current_type = WORKLOAD_RANDOM;
-        fh->prefetch_window = ai_window / 2; /* 随机访问时窗口减半 */
+        fh->prefetch_window = ai_window;
     } else {
         fh->current_type = WORKLOAD_UNKNOWN;
         fh->prefetch_window = ai_window;
     }
+
+    if (fh->prefetch_window < 1) fh->prefetch_window = 1;
+    if (fh->prefetch_window > 10) fh->prefetch_window = 10;
     
     /* 预取下一个块 */
     if (fh->current_type == WORKLOAD_SEQUENTIAL && fh->prefetch_window > 0) {
@@ -251,9 +394,14 @@ void record_io_request(unsigned short ino, int block_no, int is_read) {
             }
             
             if (!found) {
-                /* 直接读取块到缓存 */
+                /* 通过 inode 映射读取真实文件块到缓存。 */
                 unsigned char tmp[BLOCK_SIZE];
-                bread(prefetch_blk, tmp);
+                struct inode *ip = iget(ino);
+                if (ip == NULL) continue;
+                int disk_blk = bmap(ip, prefetch_blk);
+                iput(ip);
+                if (disk_blk == 0) continue;
+                bread(disk_blk, tmp);
                 
                 workload.cache[workload.cache_idx].ino = ino;
                 workload.cache[workload.cache_idx].block_no = prefetch_blk;

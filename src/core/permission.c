@@ -112,6 +112,10 @@ void chmod(char *name, unsigned short mode) {
         iput(ip);
         return;
     }
+    if (detect_anomaly("chmod", name)) {
+        iput(ip);
+        return;
+    }
     
     unsigned short old_mode = ip->i_din.di_mode;
     /* 保留文件类型位 */

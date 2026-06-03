@@ -160,5 +160,15 @@ void dir(void) {
             }
         }
     }
+
+    struct inode *kfs_ip = namei("/kfs");
+    if (kfs_ip != NULL) {
+        int is_kfs_dir = (kfs_ip->i_ino == cur_dir);
+        iput(kfs_ip);
+        if (is_kfs_dir) {
+            kfs_print_directory_entries();
+        }
+    }
+
     iput(ip);
 }

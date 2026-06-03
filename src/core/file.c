@@ -36,6 +36,10 @@ void create(char *name) {
         }
         if (slot == -1 && dir.d_ino == 0) slot = i;
     }
+    if (detect_anomaly("create", name)) {
+        iput(dip);
+        return;
+    }
     int ino = ialloc();
     if (ino == 0) {
         printf("No inode.\n");
@@ -132,6 +136,8 @@ void delete(char *name) {
         iput(dip);
         return;
     }
+
+    kfs_remove_file(name, ino);
     
     int bn = bmap(dip, i / 32);
     bread(bn, block_buf);
@@ -280,9 +286,11 @@ int read(int fd, unsigned char *buf, int count) {
         int len = BLOCKSIZ - (offset % BLOCKSIZ);
         if (len > count) len = count;
         
-        /* 先查 Per-File 预取缓存 */
+        /* KFS 热点文件优先走 KFS 数据区。 */
         int cache_hit = 0;
-        if (get_prefetched_block(ip->i_ino, lbn, block_buf)) {
+        if (kfs_read_hot_file_block(f->f_name, lbn, block_buf)) {
+            cache_hit = 1;
+        } else if (get_prefetched_block(ip->i_ino, lbn, block_buf)) {
             cache_hit = 1;
         } else {
             /* 缓存未命中，读磁盘 */
@@ -319,6 +327,9 @@ int write(int fd, unsigned char *buf, int count) {
     /* 检查打开模式 */
     if (f->f_flag == O_RDONLY) {
         printf("File not open for writing.\n");
+        return -1;
+    }
+    if (detect_anomaly("write", f->f_name)) {
         return -1;
     }
     

@@ -32,7 +32,7 @@
 | `save_vdisk` | 保存虚拟磁盘 |
 | `kfs_classify_file` 等 KFS 函数 | 若被其他线程直接调用也需加锁，否则在 `create` 内部已被保护 |
 
-此外，所有 KFS 或 AI 相关的暴露接口（如 `nlp_interact`、`show_io_stats` 等）若访问全局数据，也应按同样方式加锁。
+此外，所有 KFS 或 AI 相关的暴露接口（如 `show_io_stats` 等）若访问全局数据，也应按同样方式加锁。
 
 ### 4. 具体代码修改示例
 在 `filesystem.c` 文件顶部添加全局锁定义：

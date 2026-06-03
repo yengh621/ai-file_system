@@ -19,15 +19,16 @@ class IOAgent(BaseAgent):
     
     def _load_io_stats(self) -> Dict:
         """加载内核导出的 IO 统计数据"""
-        if not os.path.exists(self.io_stats_file):
-            return {}
-        
-        try:
-            with open(self.io_stats_file, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            self.log(f"读取 IO 统计失败: {e}")
-            return {}
+        for path in (self.io_stats_file, os.path.join(self.memory_dir, "io_stats.json")):
+            if not os.path.exists(path):
+                continue
+
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                self.log(f"读取 IO 统计失败: {e}")
+        return {}
     
     def _load_current_params(self) -> Dict:
         """从 learned_params.json 加载当前参数"""
@@ -57,6 +58,7 @@ class IOAgent(BaseAgent):
         # 获取当前参数和内核 IO 统计
         current_params = self._load_current_params()
         io_stats = self._load_io_stats()
+        selected_windows = self._select_prefetch_windows(io_stats, current_params)
         
         prompt = self._build_prompt(guidance, current_params, io_stats)
         
@@ -68,7 +70,7 @@ class IOAgent(BaseAgent):
             parsed_result = self._parse_json_response(glm_response)
             
             # 使用解析结果或回退到当前参数
-            file_prefetch_windows = parsed_result.get("file_prefetch_windows", current_params.get("file_prefetch_windows", {}))
+            file_prefetch_windows = parsed_result.get("file_prefetch_windows") or selected_windows
             reason = parsed_result.get("reason", "保持当前配置")
             
             return {
@@ -86,8 +88,51 @@ class IOAgent(BaseAgent):
                 "agent": self.name,
                 "error": str(e),
                 "suggestion": "保持当前 IO 配置",
-                "parameters": {"file_prefetch_windows": {}}
+                "parameters": {"file_prefetch_windows": selected_windows}
             }
+
+    def _select_prefetch_windows(self, io_stats: Dict, current_params: Dict) -> Dict[str, int]:
+        """Choose practical per-inode windows from persisted kernel IO stats."""
+        files = io_stats.get("files", [])
+        previous = current_params.get("file_prefetch_windows", {})
+        if not files:
+            return previous
+
+        cache_hits = int(io_stats.get("cache_hits", 0) or 0)
+        cache_misses = int(io_stats.get("cache_misses", 0) or 0)
+        total_cache = cache_hits + cache_misses
+        hit_rate = cache_hits / total_cache if total_cache else 0.0
+
+        windows: Dict[str, int] = {}
+        for item in files:
+            if not isinstance(item, dict):
+                continue
+            ino = item.get("ino")
+            if ino is None:
+                continue
+
+            key = str(ino)
+            workload_type = str(item.get("type", "unknown")).lower()
+            reads = int(item.get("total_reads", 0) or 0)
+            seq = int(item.get("sequential_transitions", 0) or 0)
+            rand = int(item.get("random_transitions", 0) or 0)
+            transitions = int(item.get("transition_count", seq + rand) or 0)
+            current = int(previous.get(key, item.get("current_prefetch_window", 3)) or 3)
+
+            if workload_type == "sequential" or (seq > 0 and seq >= rand * 2):
+                window = 8 if reads >= 4 or seq >= 2 else 6
+                if hit_rate < 0.3 and reads >= 4:
+                    window = min(10, window + 2)
+            elif workload_type == "random" or (rand > 0 and rand >= seq * 2):
+                window = 1
+            elif transitions == 0:
+                window = max(3, min(current, 5))
+            else:
+                window = 4
+
+            windows[key] = max(1, min(10, int(window)))
+
+        return windows
     
     def _parse_json_response(self, response: str) -> Dict:
         """解析 GLM 返回的 JSON 响应"""

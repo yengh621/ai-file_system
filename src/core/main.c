@@ -136,8 +136,11 @@ int main(void) {
         } else if (strcmp(cmd, "format") == 0) {
             if (cur_uid == -1) {
                 printf("Not logged in.\n");
+            } else if (cur_uid != 0) {
+                printf("Permission denied. Only root can format.\n");
             } else {
                 format();
+                cur_dir = 1;
             }
         } else if (strcmp(cmd, "create") == 0) {
             scanf("%s", arg1);
@@ -192,16 +195,6 @@ int main(void) {
         } else if (strcmp(cmd, "exit") == 0) {
             save_vdisk();
             break;
-        } else if (strcmp(cmd, "nlp") == 0) {
-            /* 读取自然语言输入 */
-            getchar(); /* 清除换行符 */
-            fgets(arg1, 256, stdin);
-            /* 去除末尾换行符 */
-            size_t len = strlen(arg1);
-            if (len > 0 && arg1[len - 1] == '\n') {
-                arg1[len - 1] = '\0';
-            }
-            nlp_interact(arg1);
         } else if (strcmp(cmd, "init_kfs") == 0) {
             init_kfs();
         } else if (strcmp(cmd, "kfs_list") == 0) {
@@ -242,6 +235,15 @@ int main(void) {
         } else if (strcmp(cmd, "link") == 0) {
             scanf("%s %s", arg1, arg2);
             link(arg1, arg2);
+        } else if (strcmp(cmd, "copy") == 0) {
+            scanf("%s %s", arg1, arg2);
+            copy_file_command(arg1, arg2);
+        } else if (strcmp(cmd, "move") == 0) {
+            scanf("%s %s", arg1, arg2);
+            move_file_command(arg1, arg2);
+        } else if (strcmp(cmd, "rename") == 0) {
+            scanf("%s %s", arg1, arg2);
+            rename_path_command(arg1, arg2);
         } else if (strcmp(cmd, "symlink") == 0) {
             scanf("%s %s", arg1, arg2);
             symlink(arg1, arg2);
@@ -273,9 +275,11 @@ int main(void) {
             printf("  chdir <name> - Change current directory\n");
             printf("  dir - List directory contents\n");
             printf("  blocks - Show block usage status\n");
-            printf("  nlp <text> - Natural language interaction\n");
             printf("\n=== 链接功能 ===\n");
             printf("  link <oldpath> <newpath> - Create hard link\n");
+            printf("  copy <oldpath> <newpath> - Copy file content into a new file\n");
+            printf("  move <oldpath> <newpath> - Move file into a new path\n");
+            printf("  rename <oldpath> <newpath> - Rename a file or directory within the same parent\n");
             printf("  symlink <oldpath> <newpath> - Create symbolic link\n");
             printf("  readlink <path> - Read symbolic link\n");
             printf("  unlink <path> - Remove link or file\n");
@@ -305,11 +309,10 @@ int main(void) {
             printf("    analyze - Trigger behavior analysis\n");
             printf("\n  help - Show this help message\n");
             printf("  exit - Exit the system\n");
-            printf("\nNLP Examples:\n");
-            printf("  nlp 创建文件 test\n");
         } else {
             printf("Unknown command. Type 'help' for available commands.\n");
         }
+        save_vdisk();
     }
     return 0;
 }

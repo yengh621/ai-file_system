@@ -143,26 +143,41 @@ def validate_link_flow(tmp: Path) -> list[str]:
     return [f"link_flow:{name}" for name, ok in checks.items() if not ok]
 
 
-def validate_nlp_flow(tmp: Path) -> list[str]:
+def validate_copy_move_flow(tmp: Path) -> list[str]:
     text = run_fs(
         """
         login
         root
         123456
-        nlp create auto.txt
-        dir
-        delete auto.txt
+        create note
+        open note w
+        write 0 hello
+        close 0
+        mkdir docs
+        copy /note /docs/note_copy
+        move /docs/note_copy /docs/note_moved
+        chdir /docs
+        open note_moved r
+        read 0 16
+        close 0
+        chdir /
+        delete note
+        chdir /docs
+        delete note_moved
+        chdir /
+        rmdir docs
         logout
         exit
         """,
         tmp,
     )
+
     checks = {
-        "nlp_exec": "正在执行: create auto.txt" in text,
-        "nlp_create": "Create successful." in text,
-        "nlp_visible": "auto.txt" in text,
+        "copy": "Copy successful: /note -> /docs/note_copy" in text,
+        "move": "Move successful: /docs/note_copy -> /docs/note_moved" in text,
+        "content": "Content: hello" in text,
     }
-    return [f"nlp_flow:{name}" for name, ok in checks.items() if not ok]
+    return [f"copy_move_flow:{name}" for name, ok in checks.items() if not ok]
 
 
 def validate_cli_flow(tmp: Path) -> list[str]:
@@ -218,6 +233,270 @@ def validate_user_memory_isolation(tmp: Path) -> list[str]:
     return failures
 
 
+def validate_agent_stats_persistence(tmp: Path) -> list[str]:
+    failures: list[str] = []
+    run_fs(
+        """
+        login
+        root
+        123456
+        create stats_note
+        open stats_note w
+        write 0 hello
+        close 0
+        open stats_note r
+        read 0 5
+        close 0
+        logout
+        exit
+        """,
+        tmp,
+    )
+
+    io_path = tmp / "debug_memory/users/0/io_stats.json"
+    kfs_path = tmp / "debug_memory/users/0/kfs_stats.json"
+    try:
+        io_stats = json.loads(io_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        failures.append(f"agent_stats:io_read:{exc}")
+        io_stats = {}
+    try:
+        kfs_stats = json.loads(kfs_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        failures.append(f"agent_stats:kfs_read:{exc}")
+        kfs_stats = {}
+
+    if not io_stats.get("files"):
+        failures.append("agent_stats:io_files")
+    if not kfs_stats.get("hot_files"):
+        failures.append("agent_stats:kfs_hot_files")
+
+    restored = run_fs(
+        """
+        login
+        root
+        123456
+        init_io_opt
+        io_stats
+        logout
+        exit
+        """,
+        tmp,
+    )
+    if "Inode" not in restored:
+        failures.append("agent_stats:io_restore")
+
+    return failures
+
+
+def validate_kfs_materialization_flow(tmp: Path) -> list[str]:
+    failures: list[str] = []
+    run_fs(
+        """
+        login
+        root
+        123456
+        create hotnote
+        open hotnote w
+        write 0 hello
+        close 0
+        open hotnote r
+        read 0 5
+        close 0
+        logout
+        exit
+        """,
+        tmp,
+    )
+
+    for cmd in (
+        ["python", "-m", "ai.cli", "set_user", "0"],
+        ["python", "-m", "ai.cli", "analyze"],
+    ):
+        result = subprocess.run(
+            cmd,
+            cwd=tmp,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            failures.append(f"kfs_materialize:returncode:{' '.join(cmd)}")
+
+    try:
+        learned = json.loads(
+            (tmp / "debug_memory/users/0/agent/memory/long_term/learned_params.json").read_text(encoding="utf-8")
+        )
+    except Exception as exc:
+        return failures + [f"kfs_materialize:learned_read:{exc}"]
+
+    hot_files = learned.get("parameters", {}).get("hot_files", [])
+    if not hot_files:
+        failures.append("kfs_materialize:learned_hot_files")
+
+    text = run_fs(
+        """
+        login
+        root
+        123456
+        kfs_ai_select
+        open hotnote r
+        read 0 5
+        close 0
+        kfs_memory_map
+        logout
+        exit
+        """,
+        tmp,
+    )
+
+    checks = {
+        "stored": "File hotnote stored in KFS" in text,
+        "fast_path": "from KFS (fast path)" in text,
+        "content": "Content: hello" in text,
+        "memory_map": "hotnote (in-KFS)" in text,
+    }
+    failures.extend(f"kfs_materialize:{name}" for name, ok in checks.items() if not ok)
+    return failures
+
+
+def validate_io_agent_prefetch_flow(tmp: Path) -> list[str]:
+    failures: list[str] = []
+    stats_dir = tmp / "debug_memory/users/0"
+    stats_dir.mkdir(parents=True, exist_ok=True)
+    (tmp / "debug_memory/current_user.json").write_text('{"uid": 0}', encoding="utf-8")
+    (stats_dir / "io_stats.json").write_text(
+        json.dumps(
+            {
+                "cache_hits": 0,
+                "cache_misses": 8,
+                "total_prefetched_blocks": 8,
+                "file_count": 1,
+                "sequential_files": 1,
+                "random_files": 0,
+                "average_prefetch_window": 3,
+                "total_read_operations": 8,
+                "files": [
+                    {
+                        "ino": 321,
+                        "total_reads": 8,
+                        "type": "sequential",
+                        "sequential_transitions": 6,
+                        "random_transitions": 0,
+                        "transition_count": 6,
+                        "current_prefetch_window": 3,
+                        "last_block": 7,
+                    }
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    for cmd in (
+        ["python", "-m", "ai.cli", "set_user", "0"],
+        ["python", "-m", "ai.cli", "analyze"],
+    ):
+        result = subprocess.run(
+            cmd,
+            cwd=tmp,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            failures.append(f"io_prefetch:returncode:{' '.join(cmd)}")
+
+    try:
+        learned = json.loads(
+            (tmp / "debug_memory/users/0/agent/memory/long_term/learned_params.json").read_text(encoding="utf-8")
+        )
+    except Exception as exc:
+        return failures + [f"io_prefetch:learned_read:{exc}"]
+
+    windows = learned.get("parameters", {}).get("file_prefetch_windows", {})
+    if int(windows.get("321", 0)) < 6:
+        failures.append("io_prefetch:sequential_window")
+
+    restored = run_fs(
+        """
+        login
+        root
+        123456
+        init_io_opt
+        io_stats
+        logout
+        exit
+        """,
+        tmp,
+    )
+    if "Inode 321" not in restored or not any(f"预取窗口: {window}" in restored for window in range(6, 11)):
+        failures.append("io_prefetch:c_applied_window")
+
+    return failures
+
+
+def validate_security_agent_flow(tmp: Path) -> list[str]:
+    failures: list[str] = []
+    commands = [["python", "-m", "ai.cli", "set_user", "0"]]
+    commands.extend(["python", "-m", "ai.cli", "record", "delete", f"old_{idx}.txt"] for idx in range(5))
+    commands.extend(["python", "-m", "ai.cli", "record", "create", f"new_{idx}.txt"] for idx in range(8))
+    commands.append(["python", "-m", "ai.cli", "analyze"])
+
+    for cmd in commands:
+        result = subprocess.run(
+            cmd,
+            cwd=tmp,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            failures.append(f"security_agent:returncode:{' '.join(cmd)}")
+
+    try:
+        learned = json.loads(
+            (tmp / "debug_memory/users/0/agent/memory/long_term/learned_params.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    except Exception as exc:
+        return failures + [f"security_agent:learned_read:{exc}"]
+
+    params = learned.get("parameters", {})
+    delete_threshold = int(params.get("delete_threshold", 0))
+    modify_threshold = int(params.get("modify_threshold", 0))
+    if delete_threshold != 5:
+        failures.append("security_agent:delete_threshold")
+    if modify_threshold != 8:
+        failures.append("security_agent:modify_threshold")
+
+    text = run_fs(
+        """
+        login
+        root
+        123456
+        user_profile
+        logout
+        exit
+        """,
+        tmp,
+    )
+    expected = f"Security thresholds: delete={delete_threshold} modify={modify_threshold}"
+    if expected not in text:
+        failures.append("security_agent:c_applied_thresholds")
+
+    return failures
+
+
 def validate_gui_bridge(tmp: Path) -> list[str]:
     old_cwd = Path.cwd()
     sys.path.insert(0, str(ROOT))
@@ -264,9 +543,13 @@ def main() -> int:
         prepare_env(tmp)
         failures.extend(validate_core_flow(tmp))
         failures.extend(validate_link_flow(tmp))
-        failures.extend(validate_nlp_flow(tmp))
+        failures.extend(validate_copy_move_flow(tmp))
         failures.extend(validate_cli_flow(tmp))
         failures.extend(validate_user_memory_isolation(tmp))
+        failures.extend(validate_agent_stats_persistence(tmp))
+        failures.extend(validate_kfs_materialization_flow(tmp))
+        failures.extend(validate_io_agent_prefetch_flow(tmp))
+        failures.extend(validate_security_agent_flow(tmp))
         failures.extend(validate_gui_bridge(tmp))
 
     if failures:

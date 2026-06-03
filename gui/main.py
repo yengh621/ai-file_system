@@ -30,6 +30,7 @@ class FileSystemGUI:
         self.root.minsize(Layout.MIN_WIDTH, Layout.MIN_HEIGHT)
         self.root.resizable(True, True)
         self.root.configure(bg=Colors.BG)
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.client = CSystemClient()
         self.logged_in = False
@@ -50,54 +51,41 @@ class FileSystemGUI:
 
     def setup_ui(self):
         """设置界面"""
-        self.root.columnconfigure(0, weight=1)
-        self.root.columnconfigure(1, weight=2)
-        self.root.columnconfigure(2, weight=1)
+        self.root.columnconfigure(0, weight=5, minsize=330)
+        self.root.columnconfigure(1, weight=9, minsize=500)
+        self.root.columnconfigure(2, weight=6, minsize=390)
         self.root.rowconfigure(1, weight=1)
 
         # 顶部状态栏
         top_frame = create_frame(self.root)
-        top_frame.grid(row=0, column=0, columnspan=3, sticky="ew", padx=10, pady=5)
+        top_frame.grid(row=0, column=0, columnspan=3, sticky="ew", padx=16, pady=(14, 8))
+        top_frame.configure(bg=Colors.BG_LIGHT)
 
         self.user_label = create_label(top_frame, "未登录", font=Fonts.SUBTITLE, fg=Colors.FG_MUTED)
-        self.user_label.pack(side=tk.LEFT)
+        self.user_label.pack(side=tk.LEFT, padx=14, pady=10)
 
         self.login_btn = create_button(top_frame, "登录", self.show_login_dialog, style="secondary")
-        self.login_btn.pack(side=tk.RIGHT)
+        self.login_btn.pack(side=tk.RIGHT, padx=12, pady=8)
 
         # 左侧面板 - 磁盘状态
         left_frame = create_frame(self.root)
-        left_frame.grid(row=1, column=0, sticky="nsew", padx=(10, 5), pady=5)
+        left_frame.grid(row=1, column=0, sticky="nsew", padx=(16, 8), pady=(4, 16))
 
         self.space_widget = SpaceUsageWidget(left_frame)
         self.space_widget.frame.pack(fill=tk.BOTH, expand=True)
 
         # 中间面板 - 命令交互和文件树
         mid_frame = create_frame(self.root)
-        mid_frame.grid(row=1, column=1, sticky="nsew", padx=(5, 5), pady=5)
-
-        # 自然语言交互
-        nlp_frame = create_frame(mid_frame)
-        nlp_frame.pack(fill=tk.X, pady=(0, 10))
-
-        create_label(nlp_frame, "💬 自然语言交互", font=Fonts.SUBTITLE, fg=Colors.PRIMARY).pack(anchor="w")
-        self.nlp_frame_inner = create_frame(nlp_frame)
-        self.nlp_frame_inner.pack(fill=tk.X, pady=(5, 0))
-
-        self.nlp_entry = create_entry(self.nlp_frame_inner, "帮我创建一个文件 test.txt")
-        self.nlp_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
-        self.nlp_entry.bind("<Return>", lambda e: self.send_nlp())
-
-        create_button(self.nlp_frame_inner, "发送到 AI", self.send_nlp, style="accent").pack(side=tk.RIGHT)
+        mid_frame.grid(row=1, column=1, sticky="nsew", padx=8, pady=(4, 16))
 
         # 命令行交互
         cmd_frame = create_frame(mid_frame)
         cmd_frame.pack(fill=tk.BOTH, expand=True)
 
-        create_label(cmd_frame, "⌨️ 命令行交互", font=Fonts.SUBTITLE, fg=Colors.PRIMARY).pack(anchor="w")
+        create_label(cmd_frame, "⌨️ 命令行交互", font=Fonts.SUBTITLE, fg=Colors.PRIMARY).pack(anchor="w", pady=(0, 6))
 
         self.cmd_entry = create_entry(cmd_frame, "dir")
-        self.cmd_entry.pack(fill=tk.X, pady=(0, 8))
+        self.cmd_entry.pack(fill=tk.X, pady=(0, 10), ipady=5)
         self.cmd_entry.bind("<Return>", lambda e: self.send_command())
 
         btn_frame2 = create_frame(cmd_frame)
@@ -112,24 +100,30 @@ class FileSystemGUI:
             on_file_double_click=self.show_file_editor,
             on_dir_double_click=self.open_directory_from_tree,
         )
-        self.file_tree_widget.frame.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+        self.file_tree_widget.frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
 
         # 右侧面板 - 智能体参数、调用记录、系统日志
         right_frame = create_frame(self.root)
-        right_frame.grid(row=1, column=2, sticky="nsew", padx=(5, 10), pady=5)
+        right_frame.grid(row=1, column=2, sticky="nsew", padx=(8, 16), pady=(4, 16))
 
         self.agent_panel = AgentPanel(right_frame)
         self.agent_panel.frame.pack(fill=tk.X, pady=(0, Layout.PADDING_SMALL))
+        self.agent_panel.frame.configure(height=235)
+        self.agent_panel.frame.pack_propagate(False)
 
         self.call_logger = CallLogViewer(right_frame)
         self.call_logger.frame.pack(fill=tk.X, pady=(0, Layout.PADDING_SMALL))
+        self.call_logger.frame.configure(height=145)
+        self.call_logger.frame.pack_propagate(False)
 
         self.content_viewer = ContentViewer(right_frame)
         self.content_viewer.frame.pack(fill=tk.BOTH, expand=True, pady=(0, Layout.PADDING_SMALL))
         self.content_viewer.set_content("系统输出将在此显示...")
 
         self.log_widget = LogWidget(right_frame)
-        self.log_widget.frame.pack(fill=tk.BOTH, expand=True)
+        self.log_widget.frame.pack(fill=tk.X)
+        self.log_widget.frame.configure(height=170)
+        self.log_widget.frame.pack_propagate(False)
 
     def start_c_system(self):
         """启动 C 端系统"""
@@ -233,7 +227,16 @@ class FileSystemGUI:
 
     def refresh_directory_tree(self):
         """Refresh the visual directory tree."""
+        if not self.logged_in:
+            self.clear_logged_out_display()
+            return
         self.execute_gui_command("dir", update_entry=False)
+
+    def clear_logged_out_display(self):
+        """Hide session-specific disk and file information after logout."""
+        self.space_widget.clear()
+        self.file_tree_widget.clear()
+        self.content_viewer.set_content("用户已登出，请登录后查看磁盘和文件信息。")
 
     def show_file_tree_menu(self, event, meta):
         """Show context actions for the directory visualization."""
@@ -244,6 +247,7 @@ class FileSystemGUI:
         if item_type == "file":
             menu.add_command(label="Copy File", command=lambda: self.copy_file_from_tree(meta))
             menu.add_command(label="Cut File", command=lambda: self.cut_file_from_tree(meta))
+            menu.add_command(label="Rename File", command=lambda: self.rename_tree_item(meta))
             menu.add_command(label="Share File", command=lambda: self.share_file_to_user(meta))
             if self.current_uid == 0:
                 menu.add_command(label="Grant To User", command=lambda: self.grant_file_to_user(meta))
@@ -254,6 +258,7 @@ class FileSystemGUI:
             if self.clipboard:
                 menu.add_command(label="Paste", command=lambda: self.paste_into_directory(meta))
             if not is_parent and meta.get("path") not in {self.home_path, "/", "/usr"}:
+                menu.add_command(label="Rename Directory", command=lambda: self.rename_tree_item(meta))
                 menu.add_command(label="Delete Directory", command=lambda: self.delete_directory_from_tree(meta))
 
         menu.tk_popup(event.x_root, event.y_root)
@@ -300,13 +305,35 @@ class FileSystemGUI:
         self.execute_gui_command(f"rmdir {name}", update_entry=True)
         self.refresh_directory_tree()
 
+    def rename_tree_item(self, meta):
+        """Rename a file or directory from the tree context menu."""
+        old_name = meta.get("name", "")
+        old_path = meta.get("path", old_name)
+        if not old_name or not old_path or meta.get("is_parent"):
+            return
+
+        new_name = simpledialog.askstring("Rename", "Enter new name:", initialvalue=old_name, parent=self.root)
+        if not new_name:
+            return
+
+        new_name = new_name.strip()
+        if not new_name or "/" in new_name or new_name in {".", ".."}:
+            messagebox.showwarning("Rename", "Please enter a valid name without '/'.")
+            return
+
+        parent_path = old_path.rsplit("/", 1)[0] or "/"
+        target_path = posixpath.join(parent_path, new_name)
+        output = self.execute_gui_command(f"rename {old_path} {target_path}", update_entry=True, record_operation=False)
+        self.content_viewer.set_content(output)
+        self.refresh_directory_tree()
+
     def copy_file_from_tree(self, meta):
-        """Copy a file using the existing link command."""
+        """Copy a file into the GUI clipboard."""
         self.clipboard = {"action": "copy", "path": meta.get("path", ""), "name": meta.get("name", "")}
         self.log(f"Copied {meta.get('name', '')} to clipboard")
 
     def cut_file_from_tree(self, meta):
-        """Cut a file using the existing link and unlink flow."""
+        """Cut a file into the GUI clipboard."""
         self.clipboard = {"action": "cut", "path": meta.get("path", ""), "name": meta.get("name", "")}
         self.log(f"Cut {meta.get('name', '')} to clipboard")
 
@@ -325,17 +352,22 @@ class FileSystemGUI:
         if source_path == target_path and self.clipboard.get("action") == "cut":
             self.clipboard = None
             return
-
-        output = self.execute_gui_command(f"link {source_path} {target_path}", update_entry=True, record_operation=False)
-        if "already exists" in output:
+        if source_path == target_path:
             new_name = simpledialog.askstring("Paste File", "Target exists. Enter a new file name:", initialvalue=file_name, parent=self.root)
             if not new_name:
                 return
             target_path = posixpath.join(target_dir, new_name.strip())
-            output = self.execute_gui_command(f"link {source_path} {target_path}", update_entry=True, record_operation=False)
 
-        if self.clipboard.get("action") == "cut" and "hard link" in output:
-            self.execute_gui_command(f"unlink {source_path}", update_entry=True, record_operation=False)
+        command_name = "move" if self.clipboard.get("action") == "cut" else "copy"
+        output = self.execute_gui_command(f"{command_name} {source_path} {target_path}", update_entry=True, record_operation=False)
+        while "already exists" in output or "source and target are the same" in output:
+            new_name = simpledialog.askstring("Paste File", "Target exists. Enter a new file name:", initialvalue=file_name, parent=self.root)
+            if not new_name:
+                return
+            target_path = posixpath.join(target_dir, new_name.strip())
+            output = self.execute_gui_command(f"{command_name} {source_path} {target_path}", update_entry=True, record_operation=False)
+
+        if self.clipboard.get("action") == "cut" and "Move successful:" in output:
             self.clipboard = None
 
         self.content_viewer.set_content(output)
@@ -382,7 +414,11 @@ class FileSystemGUI:
         """Navigate into a directory from the tree."""
         target_path = meta.get("path", self.current_path)
         if target_path:
-            self.navigate_to_path(target_path)
+            output = self.navigate_to_path(target_path)
+            if "Chdir successful" not in output and meta.get("name"):
+                output = self.navigate_to_path(meta.get("name"))
+            if "Chdir successful" not in output:
+                self.content_viewer.set_content(output or f"无法打开文件夹: {target_path}")
 
     def setup_user_paths(self, username):
         """Set the GUI browsing roots for the logged-in user."""
@@ -421,15 +457,59 @@ class FileSystemGUI:
             return ""
         return output.split(marker, 1)[1].split("\n$ ", 1)[0].strip()
 
-    def read_file_with_existing_commands(self, name):
-        open_output = self.execute_gui_command(f"open {name} r", update_entry=True)
+    def read_file_with_existing_commands(self, name, update_entry=True, record_operation=True):
+        open_output = self.execute_gui_command(f"open {name} r", update_entry=update_entry, record_operation=record_operation)
         fd = self._extract_fd(open_output)
         if fd is None:
             return ""
 
-        read_output = self.execute_gui_command(f"read {fd} 4096", update_entry=True)
-        self.execute_gui_command(f"close {fd}", update_entry=True)
+        read_output = self.execute_gui_command(f"read {fd} 4096", update_entry=update_entry, record_operation=record_operation)
+        self.execute_gui_command(f"close {fd}", update_entry=update_entry, record_operation=record_operation)
         return self._extract_content(read_output)
+
+    def _parse_directory_entries(self, dir_output):
+        entries = []
+        for raw_line in dir_output.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("Directory contents") or line.startswith("$"):
+                continue
+            if " " not in line:
+                continue
+
+            type_char, rest = line.split(" ", 1)
+            if rest.startswith(". "):
+                continue
+
+            name = rest.split("(", 1)[0].strip()
+            if not name or name in {".", ".."}:
+                continue
+            entries.append({"name": name, "type": "dir" if type_char == "d" else "file"})
+        return entries
+
+    def open_file_containing_content(self, needle):
+        needle = str(needle).strip()
+        if not needle:
+            self.content_viewer.set_content("没有提供要搜索的文件内容。")
+            return ""
+
+        dir_output = self.execute_gui_command("dir", update_entry=False, record_operation=False)
+        matches = []
+        for entry in self._parse_directory_entries(dir_output):
+            if entry["type"] != "file":
+                continue
+            content = self.read_file_with_existing_commands(entry["name"], update_entry=False, record_operation=False)
+            if needle in content:
+                matches.append(entry["name"])
+
+        if not matches:
+            message = f"没有在当前目录找到内容包含 {needle} 的文件。"
+            self.content_viewer.set_content(message)
+            return message
+
+        selected = matches[0]
+        self.content_viewer.set_content(f"找到内容包含 {needle} 的文件: {selected}")
+        self.show_file_editor(selected)
+        return f"Opened {selected}"
 
     def save_file_with_existing_commands(self, name, content):
         normalized = content.strip()
@@ -469,9 +549,11 @@ class FileSystemGUI:
             if cmd.startswith("chdir ") and "Chdir successful" in output:
                 self.current_path = cmd.split(" ", 1)[1].strip()
 
-            if cmd.strip() == "dir":
+            if cmd.strip() == "dir" and self.logged_in:
                 self.file_tree_widget.update_tree(output, current_path=self.current_path, allow_parent=self.can_navigate_up())
                 self.content_viewer.set_content("目录列表已更新")
+            elif cmd.strip() == "dir":
+                self.clear_logged_out_display()
             else:
                 self.content_viewer.set_content(output)
 
@@ -503,6 +585,7 @@ class FileSystemGUI:
         params = cached.get("parameters", {})
         if params:
             self.agent_panel.update_parameters(params)
+            self._sync_kfs_hot_files_to_kernel(params)
 
     def _apply_analysis_result(self, result):
         """Apply analysis results back onto the GUI thread."""
@@ -512,6 +595,7 @@ class FileSystemGUI:
 
         params = ai_integration.get_current_params()
         self.agent_panel.update_parameters(params)
+        self._sync_kfs_hot_files_to_kernel(params)
 
         output_text = self.format_analysis_result(result)
         self.content_viewer.set_content(output_text)
@@ -520,6 +604,22 @@ class FileSystemGUI:
         long_term = ai_integration.get_long_term_memory()
         self.log(f"馃搳 鐭椂璁板繂: {len(short_term)} 鏉?| 闀挎椂璁板繂: {len(long_term)} 鏉?")
         self.log("鉁?鍒嗘瀽瀹屾垚")
+
+    def _sync_kfs_hot_files_to_kernel(self, params):
+        """Push AI-selected hot files into the C kernel KFS area."""
+        hot_files = params.get("hot_files", []) if isinstance(params, dict) else []
+        if not hot_files:
+            self.log("KFS 暂无 AI 选择的热点文件，未写入内核 KFS")
+            return
+
+        try:
+            output = self.client.execute("kfs_ai_select")
+            if output:
+                for line in output.strip().splitlines():
+                    self.log(line)
+            self.log(f"KFS 已同步 {len(hot_files)} 个热点文件到内核")
+        except Exception as e:
+            self.log(f"KFS 热点文件同步失败: {e}")
 
     def _analysis_worker(self):
         """Run analysis in the background and marshal results to the UI thread."""
@@ -619,41 +719,6 @@ class FileSystemGUI:
         self.analysis_thread = threading.Thread(target=self._analysis_worker, daemon=True)
         self.analysis_thread.start()
 
-    def send_nlp(self):
-        """发送自然语言到 AI"""
-        if not self.logged_in:
-            messagebox.showwarning("提示", "请先登录才能使用 AI 功能")
-            return
-
-        text = self.nlp_entry.get().strip()
-        if not text:
-            return
-
-        self.log(f"📝 NLP: {text}")
-
-        try:
-            output = self.client.nlp(text)
-            self.content_viewer.set_content(output)
-            self.log(f"✅ 处理完成")
-        except Exception as e:
-            self.log(f"⚠️ 使用 Python 智能体")
-            try:
-                self.init_orchestrator()
-                result = self.orchestrator.run_full_analysis()
-
-                if "call_logs" in result:
-                    self.call_logger.update_logs(result["call_logs"])
-                if "learned_params" in result:
-                    self.agent_panel.update_parameters(result["learned_params"])
-
-                output_text = self.format_analysis_result(result)
-                self.content_viewer.set_content(output_text)
-                self.log("✅ 分析完成")
-            except Exception as e2:
-                self.content_viewer.set_content(f"处理中...\n{text}")
-
-        self.finish_operation()
-
     def send_command(self):
         """发送命令到 C 端"""
         cmd = self.cmd_entry.get().strip()
@@ -667,9 +732,11 @@ class FileSystemGUI:
             if cmd.startswith("chdir ") and "Chdir successful" in output:
                 self.current_path = cmd.split(" ", 1)[1].strip()
 
-            if cmd.strip() == "dir":
+            if cmd.strip() == "dir" and self.logged_in:
                 self.file_tree_widget.update_tree(output, current_path=self.current_path, allow_parent=self.can_navigate_up())
                 self.content_viewer.set_content("目录列表已更新")
+            elif cmd.strip() == "dir":
+                self.clear_logged_out_display()
             else:
                 self.content_viewer.set_content(output)
 
@@ -700,6 +767,7 @@ class FileSystemGUI:
                 self.stop_auto_analysis()
                 self.stop_security_monitor()
                 ai_integration.clear_user()
+                self.clear_logged_out_display()
 
             if self.logged_in and not cmd.startswith("login") and not cmd.startswith("logout"):
                 parts = cmd.split(' ')
@@ -767,9 +835,7 @@ class FileSystemGUI:
 
     def format_analysis_result(self, result):
         """格式化分析结果"""
-        output = "╔════════════════════════════════════════════════════════════╗\n"
-        output += "║                    多智能体分析报告                         ║\n"
-        output += "╚════════════════════════════════════════════════════════════╝\n\n"
+        output = "多智能体分析报告\n\n"
 
         if "analyzer_result" in result:
             output += "【 行为分析 】\n"
@@ -786,7 +852,7 @@ class FileSystemGUI:
             output += f"参数: {result['security_result'].get('parameters', {})}\n\n"
 
         if "kfs_result" in result:
-            output += "【 文件分类 】\n"
+            output += "【 KFS 热点文件 】\n"
             output += f"建议: {result['kfs_result'].get('suggestion', 'N/A')}\n"
             output += f"参数: {result['kfs_result'].get('parameters', {})}\n\n"
 
@@ -923,8 +989,19 @@ class FileSystemGUI:
         self.logged_in = False
         self.user_label.config(text="未登录")
         self.login_btn.config(text="登录", command=self.show_login_dialog)
+        self.clear_logged_out_display()
         self.log("🚪 用户登出")
         self.finish_operation()
+
+    def on_close(self):
+        """Stop the backend cleanly so virtual disk metadata is persisted."""
+        try:
+            self.stop_auto_analysis()
+            self.stop_security_monitor()
+            self.client.stop()
+        except Exception:
+            pass
+        self.root.destroy()
 
     def start_auto_analysis(self):
         """启动定时分析（每10分钟执行一次）"""
@@ -971,6 +1048,10 @@ class FileSystemGUI:
 
     def finish_operation(self):
         """操作后更新"""
+        if not self.logged_in:
+            self.space_widget.clear()
+            return
+
         try:
             storage_status = self.client.get_storage_status()
             self.space_widget.blocks = storage_status["blocks"]

@@ -8,6 +8,137 @@ static int hot_cache_initialized = 0;
 static char memory_file_map[HOT_FILE_CACHE_SIZE][DIRSIZ];
 static int memory_file_count = 0;
 
+#define KFS_HOT_FILE_BLOCKS ((KFS_TOTAL_BLKS - 3) / HOT_FILE_CACHE_SIZE)
+
+static void ensure_ai_stats_dirs(void) {
+    char command[256];
+
+    if (cur_uid != -1) {
+#ifdef _WIN32
+        snprintf(command, sizeof(command), "mkdir debug_memory\\users\\%d >NUL 2>NUL", cur_uid);
+#else
+        snprintf(command, sizeof(command), "mkdir -p debug_memory/users/%d >/dev/null 2>&1", cur_uid);
+#endif
+    } else {
+#ifdef _WIN32
+        snprintf(command, sizeof(command), "mkdir debug_memory >NUL 2>NUL");
+#else
+        snprintf(command, sizeof(command), "mkdir -p debug_memory >/dev/null 2>&1");
+#endif
+    }
+    system(command);
+}
+
+static void get_kfs_stats_path(char *path, size_t size) {
+    if (cur_uid != -1) {
+        snprintf(path, size, "debug_memory/users/%d/kfs_stats.json", cur_uid);
+    } else {
+        snprintf(path, size, "debug_memory/kfs_stats.json");
+    }
+}
+
+static int json_line_int(const char *line) {
+    const char *colon = strchr(line, ':');
+    if (!colon) return 0;
+    return atoi(colon + 1);
+}
+
+static float json_line_float(const char *line) {
+    const char *colon = strchr(line, ':');
+    if (!colon) return 0.0f;
+    return (float)atof(colon + 1);
+}
+
+static void json_line_string(const char *line, char *out, size_t out_size) {
+    const char *colon = strchr(line, ':');
+    const char *start;
+    const char *end;
+    size_t len;
+
+    if (!colon || out_size == 0) return;
+    start = strchr(colon, '"');
+    if (!start) return;
+    start++;
+    end = strchr(start, '"');
+    if (!end) return;
+    len = (size_t)(end - start);
+    if (len >= out_size) len = out_size - 1;
+    memcpy(out, start, len);
+    out[len] = '\0';
+}
+
+static int json_bool_value(const char *line) {
+    const char *colon = strchr(line, ':');
+    return colon != NULL && strstr(colon, "true") != NULL;
+}
+
+static void load_kfs_stats_from_file(const char *path) {
+    FILE *f = fopen(path, "r");
+    char line[512];
+    struct hot_file_entry pending;
+    int in_file = 0;
+    int loaded = 0;
+
+    if (!f) return;
+
+    memset(hot_file_cache, 0, sizeof(hot_file_cache));
+    memset(&pending, 0, sizeof(pending));
+
+    while (fgets(line, sizeof(line), f)) {
+        if (strstr(line, "    {")) {
+            memset(&pending, 0, sizeof(pending));
+            in_file = 1;
+            continue;
+        }
+
+        if (!in_file) continue;
+
+        if (strstr(line, "\"filename\"")) {
+            json_line_string(line, pending.filename, sizeof(pending.filename));
+        } else if (strstr(line, "\"ino\"")) {
+            pending.ino = (unsigned short)json_line_int(line);
+        } else if (strstr(line, "\"access_count\"")) {
+            pending.access_count = json_line_int(line);
+        } else if (strstr(line, "\"short_term_score\"")) {
+            pending.short_term_score = json_line_float(line);
+        } else if (strstr(line, "\"long_term_score\"")) {
+            pending.long_term_score = json_line_float(line);
+        } else if (strstr(line, "\"stored_in_kfs\"")) {
+            pending.stored_in_kfs = strstr(line, "true") != NULL;
+        } else if (strstr(line, "\"first_access\"")) {
+            pending.first_access = (unsigned long)json_line_int(line);
+        } else if (strstr(line, "\"last_access\"")) {
+            pending.last_access = (unsigned long)json_line_int(line);
+        } else if (strstr(line, "\"kfs_data_start_blk\"")) {
+            pending.kfs_data_start_blk = json_line_int(line);
+        } else if (strstr(line, "\"kfs_data_blk_count\"")) {
+            pending.kfs_data_blk_count = json_line_int(line);
+        } else if (strstr(line, "}")) {
+            if (pending.filename[0] != '\0' && pending.ino != 0 && loaded < HOT_FILE_CACHE_SIZE) {
+                if (pending.first_access == 0) pending.first_access = (unsigned long)time(NULL);
+                if (pending.last_access == 0) pending.last_access = pending.first_access;
+                hot_file_cache[loaded++] = pending;
+            }
+            in_file = 0;
+        }
+    }
+
+    fclose(f);
+    if (loaded > 0) {
+        kfs_update_memory_map();
+    }
+}
+
+static void load_kfs_stats_from_disk(void) {
+    char path[256];
+
+    get_kfs_stats_path(path, sizeof(path));
+    load_kfs_stats_from_file(path);
+    if (memory_file_count == 0) {
+        load_kfs_stats_from_file("debug_memory/kfs_stats.json");
+    }
+}
+
 /* === 一、KFS 持久化 === */
 
 /* 保存 KFS 到磁盘 - 只保存热点文件 */
@@ -61,6 +192,10 @@ void kfs_load_from_disk() {
     
     if (strncmp(hdr->magic, "KFS_V1", 6) != 0) {
         printf("No valid KFS found on disk. Initializing new KFS.\n");
+        memset(hot_file_cache, 0, sizeof(hot_file_cache));
+        memset(memory_file_map, 0, sizeof(memory_file_map));
+        memory_file_count = 0;
+        return;
     }
     
     /* 2. 加载热点文件索引 */
@@ -111,11 +246,17 @@ int kfs_store_hot_file(char *filename, unsigned short ino) {
         return 0;
     }
     
-    /* 分配 KFS 数据块 */
-    int start_blk = KFS_HOT_DATA_BLK + hot_idx * 10; /* 每个文件预留10块 */
-    if (start_blk + num_blocks > KFS_START + KFS_TOTAL_BLKS) {
+    if (KFS_HOT_FILE_BLOCKS <= 0) {
         iput(ip);
-        printf("KFS data area full\n");
+        printf("KFS data area is too small\n");
+        return 0;
+    }
+
+    /* 分配 KFS 数据块 */
+    int start_blk = KFS_HOT_DATA_BLK + hot_idx * KFS_HOT_FILE_BLOCKS;
+    if (num_blocks > KFS_HOT_FILE_BLOCKS || start_blk + num_blocks > KFS_START + KFS_TOTAL_BLKS) {
+        iput(ip);
+        printf("KFS data area full or file too large for KFS slot\n");
         return 0;
     }
     
@@ -131,6 +272,11 @@ int kfs_store_hot_file(char *filename, unsigned short ino) {
     /* 更新热点条目 */
     strncpy(hot_file_cache[hot_idx].filename, filename, DIRSIZ - 1);
     hot_file_cache[hot_idx].ino = ino;
+    hot_file_cache[hot_idx].access_count++;
+    if (hot_file_cache[hot_idx].first_access == 0) {
+        hot_file_cache[hot_idx].first_access = (unsigned long)time(NULL);
+    }
+    hot_file_cache[hot_idx].last_access = (unsigned long)time(NULL);
     hot_file_cache[hot_idx].stored_in_kfs = 1;
     hot_file_cache[hot_idx].kfs_data_start_blk = start_blk;
     hot_file_cache[hot_idx].kfs_data_blk_count = num_blocks;
@@ -150,16 +296,28 @@ int kfs_store_hot_file(char *filename, unsigned short ino) {
     
     iput(ip);
     printf("File %s stored in KFS, %d blocks\n", filename, num_blocks);
+    kfs_save_to_disk();
+    export_kfs_stats_to_ai();
     return 1;
 }
 
 /* 从 KFS 读取热点文件 */
 int kfs_read_hot_file(char *filename, unsigned char *buf) {
+    return kfs_read_hot_file_block(filename, 0, buf);
+}
+
+int kfs_read_hot_file_block(char *filename, int block_index, unsigned char *buf) {
     for (int i = 0; i < HOT_FILE_CACHE_SIZE; i++) {
         if (hot_file_cache[i].stored_in_kfs && 
             strcmp(hot_file_cache[i].filename, filename) == 0) {
-            printf("✓ Reading %s from KFS (fast path)\n", filename);
-            return 1; /* 这里可以扩展为实际读取 */
+            if (block_index < 0 || block_index >= hot_file_cache[i].kfs_data_blk_count) {
+                return 0;
+            }
+            if (buf) {
+                bread(hot_file_cache[i].kfs_data_start_blk + block_index, buf);
+            }
+            printf("✓ Reading %s block %d from KFS (fast path)\n", filename, block_index);
+            return 1;
         }
     }
     return 0;
@@ -176,6 +334,29 @@ int kfs_is_file_hot(char *filename) {
     return 0;
 }
 
+void kfs_remove_file(char *filename, unsigned short ino) {
+    int changed = 0;
+
+    if (!hot_cache_initialized) {
+        kfs_load_from_disk();
+        load_kfs_stats_from_disk();
+        hot_cache_initialized = 1;
+    }
+
+    for (int i = 0; i < HOT_FILE_CACHE_SIZE; i++) {
+        if (hot_file_cache[i].access_count > 0 &&
+            (strcmp(hot_file_cache[i].filename, filename) == 0 || hot_file_cache[i].ino == ino)) {
+            memset(&hot_file_cache[i], 0, sizeof(hot_file_cache[i]));
+            changed = 1;
+        }
+    }
+
+    if (changed) {
+        kfs_update_memory_map();
+        export_kfs_stats_to_ai();
+    }
+}
+
 /* 更新内存内容文件 */
 void kfs_update_memory_map() {
     memory_file_count = 0;
@@ -186,6 +367,7 @@ void kfs_update_memory_map() {
         }
     }
     kfs_save_to_disk();
+    export_kfs_stats_to_ai();
 }
 
 /* 显示内存内容文件 */
@@ -211,6 +393,7 @@ void init_kfs() {
     
     /* 先尝试从磁盘加载 */
     kfs_load_from_disk();
+    load_kfs_stats_from_disk();
     
     /* 从 AI 学习参数加载热点文件 */
     kfs_load_hot_files_from_ai();
@@ -218,13 +401,15 @@ void init_kfs() {
     printf("=== KFS 智能文件系统初始化完成 ===\n");
     printf("KFS disk area: blocks %d-%d\n", KFS_START, KFS_START + KFS_TOTAL_BLKS - 1);
     hot_cache_initialized = 1;
+    export_kfs_stats_to_ai();
 }
 
 /* === 四、热点缓存函数 === */
 
 unsigned short kfs_hot_cache_lookup(char *filename) {
     if (!hot_cache_initialized) {
-        memset(hot_file_cache, 0, sizeof(hot_file_cache));
+        kfs_load_from_disk();
+        load_kfs_stats_from_disk();
         hot_cache_initialized = 1;
     }
     
@@ -235,6 +420,7 @@ unsigned short kfs_hot_cache_lookup(char *filename) {
             hot_file_cache[i].access_count++;
             hot_file_cache[i].last_access = (unsigned long)time(NULL);
             printf("✓ KFS hot cache hit: %s (ino:%d)\n", filename, hot_file_cache[i].ino);
+            export_kfs_stats_to_ai();
             
             /* 每10次访问尝试从AI加载更新 */
             if (hot_file_cache[i].access_count % 10 == 0) {
@@ -250,7 +436,8 @@ unsigned short kfs_hot_cache_lookup(char *filename) {
 
 void kfs_hot_cache_update(char *filename, unsigned short ino) {
     if (!hot_cache_initialized) {
-        memset(hot_file_cache, 0, sizeof(hot_file_cache));
+        kfs_load_from_disk();
+        load_kfs_stats_from_disk();
         hot_cache_initialized = 1;
     }
     
@@ -356,7 +543,10 @@ void kfs_load_hot_files_from_ai() {
     
     char line[512];
     int in_hot_files = 0;
+    int in_object = 0;
     int stored_count = 0;
+    char filename[DIRSIZ] = {0};
+    unsigned short ino = 0;
     
     /* 先找到 hot_files 开始的位置 */
     while (fgets(line, sizeof(line), f)) {
@@ -370,34 +560,24 @@ void kfs_load_hot_files_from_ai() {
             if (strstr(line, "]")) {
                 break;
             }
-            
-            /* 查找 filename 字段 */
-            char* filename_start = strstr(line, "\"filename\":");
-            if (filename_start) {
-                /* 简单解析 - 提取文件名 */
-                char filename[DIRSIZ] = {0};
-                unsigned short ino = 0;
-                
-                /* 提取 filename */
-                filename_start = strchr(filename_start, '\"');
-                if (filename_start) {
-                    filename_start++;
-                    char* filename_end = strchr(filename_start, '\"');
-                    if (filename_end) {
-                        int len = filename_end - filename_start;
-                        if (len < DIRSIZ) {
-                            strncpy(filename, filename_start, len);
-                            filename[len] = '\0';
-                        }
-                    }
-                }
-                
-                /* 提取 ino */
-                char* ino_start = strstr(line, "\"ino\":");
-                if (ino_start) {
-                    ino = (unsigned short)atoi(ino_start + 6);
-                }
-                
+
+            if (strstr(line, "{")) {
+                memset(filename, 0, sizeof(filename));
+                ino = 0;
+                in_object = 1;
+            }
+
+            if (!in_object) {
+                continue;
+            }
+
+            if (strstr(line, "\"filename\"")) {
+                json_line_string(line, filename, sizeof(filename));
+            } else if (strstr(line, "\"ino\"")) {
+                ino = (unsigned short)json_line_int(line);
+            }
+
+            if (strstr(line, "}")) {
                 /* 如果有 filename 和 ino，尝试存储到 KFS */
                 if (filename[0] != '\0' && ino != 0) {
                     /* 先检查是否已经存储了 */
@@ -416,6 +596,7 @@ void kfs_load_hot_files_from_ai() {
                         }
                     }
                 }
+                in_object = 0;
             }
         }
     }
@@ -432,7 +613,11 @@ void kfs_load_hot_files_from_ai() {
 
 /* 导出 KFS 热点文件数据到 JSON，供 AI Agent 使用 */
 void export_kfs_stats_to_ai() {
-    FILE* f = fopen("debug_memory/kfs_stats.json", "w");
+    char path[256];
+
+    ensure_ai_stats_dirs();
+    get_kfs_stats_path(path, sizeof(path));
+    FILE* f = fopen(path, "w");
     if (!f) return;
     
     fprintf(f, "{\n");
@@ -453,7 +638,11 @@ void export_kfs_stats_to_ai() {
         fprintf(f, "      \"access_count\": %d,\n", hot_file_cache[i].access_count);
         fprintf(f, "      \"short_term_score\": %.1f,\n", hot_file_cache[i].short_term_score);
         fprintf(f, "      \"long_term_score\": %.1f,\n", hot_file_cache[i].long_term_score);
-        fprintf(f, "      \"stored_in_kfs\": %s\n", hot_file_cache[i].stored_in_kfs ? "true" : "false");
+        fprintf(f, "      \"stored_in_kfs\": %s,\n", hot_file_cache[i].stored_in_kfs ? "true" : "false");
+        fprintf(f, "      \"first_access\": %lu,\n", hot_file_cache[i].first_access);
+        fprintf(f, "      \"last_access\": %lu,\n", hot_file_cache[i].last_access);
+        fprintf(f, "      \"kfs_data_start_blk\": %d,\n", hot_file_cache[i].kfs_data_start_blk);
+        fprintf(f, "      \"kfs_data_blk_count\": %d\n", hot_file_cache[i].kfs_data_blk_count);
         fprintf(f, "    }");
     }
     
@@ -477,6 +666,22 @@ void kfs_list_virtual_dir(char *vdir) {
 }
 
 /* 根据 inode 判断是否是热点文件 */
+void kfs_print_directory_entries() {
+    if (!hot_cache_initialized) {
+        kfs_load_from_disk();
+        load_kfs_stats_from_disk();
+        hot_cache_initialized = 1;
+    }
+
+    for (int i = 0; i < HOT_FILE_CACHE_SIZE; i++) {
+        if (hot_file_cache[i].stored_in_kfs && hot_file_cache[i].filename[0] != '\0') {
+            printf("- %s (ino: %d, links: 1) [KFS]\n",
+                   hot_file_cache[i].filename,
+                   hot_file_cache[i].ino);
+        }
+    }
+}
+
 int kfs_is_file_hot_by_ino(int ino) {
     for (int i = 0; i < HOT_FILE_CACHE_SIZE; i++) {
         if (hot_file_cache[i].ino == ino && hot_file_cache[i].access_count > 0) {

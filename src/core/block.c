@@ -2,15 +2,23 @@
 
 int ialloc(void) {
     int ino;
-    if (sb.s_ninode > 0) {
-    ino = sb.s_inode[--sb.s_ninode];
-    if (ino < 1 || ino > 512) {   // 有效性检查
-        printf("Error: invalid inode %d from stack!\n", ino);
-        // 可尝试扫描或返回 0
+    while (sb.s_ninode > 0) {
+        struct dinode di;
+
+        ino = sb.s_inode[--sb.s_ninode];
+        if (ino < 1 || ino > DINODEBLK * (BLOCKSIZ / DINODESIZ)) {
+            printf("Error: invalid inode %d from stack!\n", ino);
+            continue;
+        }
+
+        iget_inode(ino, &di);
+        if (di.di_mode != 0) {
+            continue;
+        }
+
+        sb.s_fmod = 1;
+        return ino;
     }
-    sb.s_fmod = 1;
-    return ino;
-}
     for (ino = 1; ino <= DINODEBLK * (BLOCKSIZ / DINODESIZ); ino++) {
         struct dinode di;
         iget_inode(ino, &di);

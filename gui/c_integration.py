@@ -168,6 +168,11 @@ class CSystemClient:
         self.wrapper.send_command(cmd)
         return self.wrapper.get_output_until_prompt(timeout=1.0)
 
+    def execute_with_timeout(self, cmd, timeout=1.0):
+        """Execute a backend command with a caller-selected response timeout."""
+        self.wrapper.send_command(cmd)
+        return self.wrapper.get_output_until_prompt(timeout=timeout)
+
     def login(self, username, password):
         """Drive the interactive login flow without fixed delays."""
         self.wrapper.send_command("login")
@@ -237,10 +242,6 @@ class CSystemClient:
             bits = [ch == "1" for ch in status]
             return bits + [False] * (expected_count - len(bits))
         return [False] * expected_count
-
-    def nlp(self, text):
-        """Send natural-language input to the backend."""
-        return self.execute(f"nlp {text}")
 
     def stop(self):
         """Stop the backend process."""

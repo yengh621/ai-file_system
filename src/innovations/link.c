@@ -358,15 +358,21 @@ found_dirent:
                 ip->i_din.di_addr[i] = 0;
             }
         }
-        /* 释放 inode */
-        ifree(ip->i_ino);
+        ip->i_din.di_mode = 0;
+        ip->i_din.di_size = 0;
+        ip->i_flag |= 1;
         printf("unlink: %s deleted (last link)\n", path);
     } else {
         iput_inode(ip->i_ino, &ip->i_din);
         printf("unlink: %s removed (links remaining: %d)\n", path, ip->i_din.di_nlink);
     }
     
+    int freed_ino = ip->i_ino;
+    int should_free_inode = ip->i_din.di_nlink <= 0;
     iput(ip);
+    if (should_free_inode) {
+        ifree(freed_ino);
+    }
     iput(dir_ip);
     return 0;
 }

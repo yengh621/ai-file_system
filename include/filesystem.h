@@ -297,9 +297,6 @@ int lock_file(unsigned short ino, int lock_type);
 void unlock_file(unsigned short ino, int lock_type);
 void init_file_locks();
 
-/* AI 相关函数声明 */
-void nlp_interact(char *text);
-
 /* === KFS 热点文件缓存函数声明 === */
 void init_kfs();
 unsigned short kfs_hot_cache_lookup(char *filename);
@@ -317,11 +314,14 @@ void kfs_load_hot_files_from_ai();
 /* KFS 热点文件存储 */
 int kfs_store_hot_file(char *filename, unsigned short ino);
 int kfs_read_hot_file(char *filename, unsigned char *buf);
+int kfs_read_hot_file_block(char *filename, int block_index, unsigned char *buf);
 int kfs_is_file_hot(char *filename);
+void kfs_remove_file(char *filename, unsigned short ino);
 
 /* KFS 内存内容文件 */
 void kfs_update_memory_map();
 void kfs_show_memory_map();
+void kfs_print_directory_entries();
 
 /* KFS 导出给 AI */
 void export_kfs_stats_to_ai();
@@ -364,6 +364,9 @@ int fs_unlink(char *path);                           /* 删除链接 */
 int is_link(struct inode *ip);                       /* 判断是否是符号链接 */
 int readlink_inode(struct inode *ip, char *buf, int bufsize); /* 从 inode 读取链接 */
 struct inode* resolve_link(struct inode *ip, int *err);  /* 解析符号链接 */
+int copy_file_command(char *source_path, char *target_path);
+int move_file_command(char *source_path, char *target_path);
+int rename_path_command(char *source_path, char *target_path);
 
 /* === 集成层：记忆优化集成 === */
 void init_integration();

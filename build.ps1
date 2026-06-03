@@ -50,7 +50,8 @@ $innovationFiles = @(
     "src/innovations/kfs.c",
     "src/innovations/io_optimizer.c",
     "src/innovations/security.c",
-    "src/innovations/link.c"
+    "src/innovations/link.c",
+    "src/innovations/file_ops.c"
 )
 
 foreach ($file in $innovationFiles) {
