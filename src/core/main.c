@@ -154,6 +154,7 @@ int main(void) {
             if (strcmp(arg2, "r") == 0) mode = O_RDONLY;
             else if (strcmp(arg2, "w") == 0) mode = O_WRONLY;
             else if (strcmp(arg2, "rw") == 0) mode = O_RDWR;
+            else if (strcmp(arg2, "a") == 0) mode = O_APPEND;
             open(arg1, mode);
         } else if (strcmp(cmd, "close") == 0) {
             int fd;
@@ -166,12 +167,17 @@ int main(void) {
             int n = read(fd, buf, count);
             if (n > 0) {
                 buf[n] = '\0';
-                printf("Content: %s\n", buf);
+                printf("Content:\n");
+                for (int i = 0; i < n; i++) {
+                    putchar(buf[i]);
+                }
+                printf("\n");
             }
             free(buf);
         } else if (strcmp(cmd, "write") == 0) {
             int fd;
-            scanf("%d %s", &fd, arg1);
+            scanf("%d", &fd);
+            fgets(arg1, 1024, stdin);
             write(fd, (unsigned char*)arg1, strlen(arg1));
         } else if (strcmp(cmd, "mkdir") == 0) {
             scanf("%s", arg1);
@@ -187,10 +193,10 @@ int main(void) {
             int writable = 0;
             scanf("%s %s %d", arg1, arg2, &writable);
             grant(arg1, arg2, writable);
-        } else if (strcmp(cmd, "chdir") == 0) {
+        } else if (strcmp(cmd, "chdir") == 0 || strcmp(cmd, "cd") == 0) {
             scanf("%s", arg1);
             chdir(arg1);
-        } else if (strcmp(cmd, "dir") == 0) {
+        } else if (strcmp(cmd, "dir") == 0 || strcmp(cmd, "ls") == 0) {
             dir();
         } else if (strcmp(cmd, "exit") == 0) {
             save_vdisk();
