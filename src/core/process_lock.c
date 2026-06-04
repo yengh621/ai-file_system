@@ -1,9 +1,22 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
+
+#define open __system_open
 #include <windows.h>
+#undef open
+
+#else
+
+#define open __system_open
+#include <fcntl.h>
+#undef open
+
 #endif
 
 #include "filesystem.h"
+
+#include <string.h>
+#include <stdio.h>
 
 #ifdef _WIN32
 
@@ -78,7 +91,6 @@ void process_unlock_inode(unsigned short ino, int lock_type) {
 }
 
 #else
-#include <fcntl.h>
 
 static FILE *lock_file_fp = NULL;
 static int lock_file_fd = -1;
