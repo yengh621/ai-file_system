@@ -186,6 +186,13 @@ found_free:
     dir_ptr[free_idx].d_name[DIRSIZ - 1] = '\0';
     dir_ptr[free_idx].d_ino = old_inode->i_ino;
     bwrite(free_blk, buf);
+
+    int entries_per_block = BLOCKSIZ / sizeof(struct direct);
+    unsigned long dir_slot = (unsigned long)(i / entries_per_block) * entries_per_block + free_idx;
+    unsigned long required_size = (dir_slot + 1) * sizeof(struct direct);
+    if (required_size > dir_inode->i_din.di_size) {
+        dir_inode->i_din.di_size = required_size;
+    }
     
     /* 增加链接计数 */
     old_inode->i_din.di_nlink++;

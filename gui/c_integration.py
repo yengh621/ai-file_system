@@ -12,14 +12,16 @@ import platform
 
 # ========== 跨平台自动配置 ==========
 OS_NAME = platform.system()
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # 可执行文件名
 if OS_NAME == "Windows":
     BIN_NAME = "filesystem.exe"
-    BUILD_CMD = ["powershell", "-ExecutionPolicy", "Bypass", "-File", "build.ps1"]
+    BUILD_CMD = ["powershell", "-ExecutionPolicy", "Bypass", "-File", os.path.join(PROJECT_ROOT, "build.ps1")]
 else:
     # Linux / WSL / macOS
     BIN_NAME = "filesystem"
     BUILD_CMD = ["make"]
+BIN_PATH = os.path.join(PROJECT_ROOT, BIN_NAME)
 
 
 class CSystemWrapper:
@@ -34,14 +36,14 @@ class CSystemWrapper:
         """Start filesystem, building it first only when missing."""
         try:
             # 自动判断是否存在可执行文件
-            if not os.path.exists(BIN_NAME):
-                subprocess.run(BUILD_CMD, shell=False)
+            if not os.path.exists(BIN_PATH):
+                subprocess.run(BUILD_CMD, shell=False, cwd=PROJECT_ROOT)
 
             # 跨平台启动命令
             if OS_NAME == "Windows":
-                exec_cmd = [BIN_NAME]
+                exec_cmd = [BIN_PATH]
             else:
-                exec_cmd = [f"./{BIN_NAME}"]
+                exec_cmd = [BIN_PATH]
 
             self.process = subprocess.Popen(
                 exec_cmd,
@@ -49,6 +51,7 @@ class CSystemWrapper:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 bufsize=0,
+                cwd=PROJECT_ROOT,
             )
 
             self.reading = True

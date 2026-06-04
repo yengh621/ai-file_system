@@ -28,6 +28,7 @@ $files = @(
     "src/core/file.c",
     "src/core/user.c",
     "src/core/permission.c",
+    "src/core/process_lock.c",
     "src/core/ai.c"
 )
 

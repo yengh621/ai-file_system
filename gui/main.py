@@ -97,7 +97,7 @@ class FileSystemGUI:
         self.file_tree_widget = FileTreeWidget(
             cmd_frame,
             on_context_menu=self.show_file_tree_menu,
-            on_file_double_click=self.show_file_editor,
+            on_file_double_click=self.show_file_viewer,
             on_dir_double_click=self.open_directory_from_tree,
         )
         self.file_tree_widget.frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
@@ -185,7 +185,7 @@ class FileSystemGUI:
             return
 
         username = username.strip()
-        output = self.execute_gui_command(f"chmod {name} 666", update_entry=True)
+        output = self.execute_gui_command(f"grant {name} {username} 1", update_entry=True, record_operation=False)
         self.content_viewer.set_content(f"{output}\nShared {name} to {username}.")
 
     def show_file_editor(self, name):
@@ -225,6 +225,128 @@ class FileSystemGUI:
         create_button(btn_frame, "取消", dialog.destroy, style="secondary").pack(side=tk.RIGHT, padx=(8, 0))
         create_button(btn_frame, "保存", save_content, style="accent").pack(side=tk.RIGHT)
 
+    def _file_name_from_meta(self, meta):
+        if isinstance(meta, dict):
+            return meta.get("path") or meta.get("name", "")
+        return str(meta)
+
+    def _friendly_backend_message(self, output, action="open"):
+        output = output or ""
+        if "another process writer" in output:
+            return "This shared file is currently write-locked by another process. Try again after that user closes it."
+        if "locked by another process" in output:
+            return "This shared file is currently locked by another process. Try again after that user closes it."
+        if "locked by this process" in output:
+            return "This file is already open in this GUI session. Close the existing viewer/editor first."
+        if "Permission denied" in output:
+            return f"You do not have permission to {action} this file."
+        if "File not found" in output:
+            return "The file was not found. Refresh the directory and try again."
+        return ""
+
+    def _show_backend_notice(self, title, output, action="open"):
+        message = self._friendly_backend_message(output, action=action)
+        if not message:
+            return False
+        self.log(message)
+        self.content_viewer.set_content(f"{message}\n\nBackend output:\n{output}")
+        messagebox.showwarning(title, message)
+        return True
+
+    def show_file_viewer(self, meta):
+        """Open a read-only preview. Double-click uses this safer path."""
+        name = self._file_name_from_meta(meta)
+        if not name:
+            return
+
+        result = self.read_file_with_existing_commands(name)
+        if not result["ok"]:
+            self._show_backend_notice("Open Read-only", result["open_output"], action="read")
+            return
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"Read-only preview - {name}")
+        dialog.geometry("560x420")
+        dialog.configure(bg=Colors.BG)
+        dialog.transient(self.root)
+
+        viewer = scrolledtext.ScrolledText(
+            dialog,
+            bg=Colors.BG_LIGHT,
+            fg=Colors.FG,
+            insertbackground=Colors.PRIMARY,
+            font=Fonts.MONO,
+            relief="flat",
+            wrap="word"
+        )
+        viewer.pack(fill=tk.BOTH, expand=True, padx=16, pady=(16, 8))
+        viewer.insert("1.0", result["content"])
+        viewer.config(state=tk.DISABLED)
+
+        btn_frame = create_frame(dialog)
+        btn_frame.pack(fill=tk.X, padx=16, pady=(0, 16))
+        create_button(btn_frame, "Edit with write lock", lambda: (dialog.destroy(), self.show_file_editor(meta)), style="accent").pack(side=tk.RIGHT)
+        create_button(btn_frame, "Close", dialog.destroy, style="secondary").pack(side=tk.RIGHT, padx=(8, 0))
+        self.log(f"Opened {name} in read-only mode.")
+
+    def show_file_editor(self, meta):
+        """Open a modal editor for file content."""
+        name = self._file_name_from_meta(meta)
+        if not name:
+            return
+
+        open_output = self.execute_gui_command(f"open {name} rw", update_entry=True, record_operation=False)
+        fd = self._extract_fd(open_output)
+        if fd is None:
+            self._show_backend_notice("Open Editor", open_output, action="write")
+            return
+
+        read_output = self.execute_gui_command(f"read {fd} 4096", update_entry=True, record_operation=False)
+        content = self._extract_content(read_output)
+        self.execute_gui_command(f"seek {fd} 0", update_entry=True, record_operation=False)
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"Edit file - {name}")
+        dialog.geometry("560x420")
+        dialog.configure(bg=Colors.BG)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        editor = scrolledtext.ScrolledText(
+            dialog,
+            bg=Colors.BG_LIGHT,
+            fg=Colors.FG,
+            insertbackground=Colors.PRIMARY,
+            font=Fonts.MONO,
+            relief="flat",
+            wrap="word"
+        )
+        editor.pack(fill=tk.BOTH, expand=True, padx=16, pady=(16, 8))
+        editor.insert("1.0", content)
+
+        btn_frame = create_frame(dialog)
+        btn_frame.pack(fill=tk.X, padx=16, pady=(0, 16))
+        lock_state = {"closed": False}
+
+        def close_editor():
+            if not lock_state["closed"]:
+                self.execute_gui_command(f"close {fd}", update_entry=True, record_operation=False)
+                lock_state["closed"] = True
+                self.log(f"Released write lock for {name}.")
+            dialog.destroy()
+
+        def save_content():
+            if not self.save_locked_editor_content(name, fd, editor.get("1.0", "end-1c"), original_content=content):
+                return
+            lock_state["closed"] = True
+            dialog.destroy()
+            self.refresh_directory_tree()
+
+        dialog.protocol("WM_DELETE_WINDOW", close_editor)
+        create_button(btn_frame, "Cancel", close_editor, style="secondary").pack(side=tk.RIGHT, padx=(8, 0))
+        create_button(btn_frame, "Save", save_content, style="accent").pack(side=tk.RIGHT)
+        self.log(f"Holding write lock for {name} until this editor is closed.")
+
     def refresh_directory_tree(self):
         """Refresh the visual directory tree."""
         if not self.logged_in:
@@ -245,6 +367,8 @@ class FileSystemGUI:
         is_parent = meta.get("is_parent", False)
 
         if item_type == "file":
+            menu.add_command(label="View Read-only", command=lambda: self.show_file_viewer(meta))
+            menu.add_command(label="Edit File", command=lambda: self.show_file_editor(meta))
             menu.add_command(label="Copy File", command=lambda: self.copy_file_from_tree(meta))
             menu.add_command(label="Cut File", command=lambda: self.cut_file_from_tree(meta))
             menu.add_command(label="Rename File", command=lambda: self.rename_tree_item(meta))
@@ -384,8 +508,22 @@ class FileSystemGUI:
         if not username:
             return
 
-        output = self.execute_gui_command(f"chmod {file_path} 666", update_entry=True)
-        self.content_viewer.set_content(f"{output}\nShared {name} to {username.strip()}.")
+        username = username.strip()
+        writable = messagebox.askyesno("Share Mode", "Allow the target user to write this shared file too?")
+        output = self.execute_gui_command(
+            f"grant {file_path} {username} {1 if writable else 0}",
+            update_entry=True,
+            record_operation=False,
+        )
+        target_path = f"/usr/{username}/{name}"
+        if "Grant successful" in output:
+            self.content_viewer.set_content(
+                f"{output}\n\nShared file is visible at: {target_path}\nMode: {'read/write' if writable else 'read-only'}"
+            )
+            self.log(f"Shared {file_path} to {target_path}.")
+        else:
+            self.content_viewer.set_content(output)
+            self._show_backend_notice("Share File", output, action="share")
 
     def grant_file_to_user(self, meta):
         """Grant a file into another user's directory using root commands."""
@@ -461,11 +599,16 @@ class FileSystemGUI:
         open_output = self.execute_gui_command(f"open {name} r", update_entry=update_entry, record_operation=record_operation)
         fd = self._extract_fd(open_output)
         if fd is None:
-            return ""
+            return {"ok": False, "content": "", "open_output": open_output, "read_output": ""}
 
         read_output = self.execute_gui_command(f"read {fd} 4096", update_entry=update_entry, record_operation=record_operation)
         self.execute_gui_command(f"close {fd}", update_entry=update_entry, record_operation=record_operation)
-        return self._extract_content(read_output)
+        return {
+            "ok": True,
+            "content": self._extract_content(read_output),
+            "open_output": open_output,
+            "read_output": read_output,
+        }
 
     def _parse_directory_entries(self, dir_output):
         entries = []
@@ -497,7 +640,8 @@ class FileSystemGUI:
         for entry in self._parse_directory_entries(dir_output):
             if entry["type"] != "file":
                 continue
-            content = self.read_file_with_existing_commands(entry["name"], update_entry=False, record_operation=False)
+            result = self.read_file_with_existing_commands(entry["name"], update_entry=False, record_operation=False)
+            content = result["content"] if result["ok"] else ""
             if needle in content:
                 matches.append(entry["name"])
 
@@ -508,7 +652,7 @@ class FileSystemGUI:
 
         selected = matches[0]
         self.content_viewer.set_content(f"找到内容包含 {needle} 的文件: {selected}")
-        self.show_file_editor(selected)
+        self.show_file_viewer(selected)
         return f"Opened {selected}"
 
     def save_file_with_existing_commands(self, name, content):
@@ -529,6 +673,65 @@ class FileSystemGUI:
                 return False
             self.execute_gui_command(f"write {fd} {normalized}", update_entry=True)
             self.execute_gui_command(f"close {fd}", update_entry=True)
+        return True
+
+    def save_file_with_existing_commands(self, name, content, original_content=""):
+        normalized = content.strip()
+        if "\n" in content or "\r" in content:
+            messagebox.showwarning(
+                "Save limitation",
+                "The backend write command accepts one line at a time. Remove line breaks before saving."
+            )
+            return False
+        if not normalized:
+            messagebox.showwarning("Save limitation", "The backend cannot truncate a file to empty from the GUI yet.")
+            return False
+        if len(normalized) < len(original_content):
+            messagebox.showwarning(
+                "Save limitation",
+                "The backend has no truncate command yet. Keep the saved text at least as long as the original content."
+            )
+            return False
+
+        open_output = self.execute_gui_command(f"open {name} w", update_entry=True)
+        fd = self._extract_fd(open_output)
+        if fd is None:
+            self._show_backend_notice("Save File", open_output, action="write")
+            return False
+
+        write_output = self.execute_gui_command(f"write {fd} {normalized}", update_entry=True)
+        self.execute_gui_command(f"close {fd}", update_entry=True)
+        if "Write" not in write_output:
+            self._show_backend_notice("Save File", write_output, action="write")
+            return False
+        self.log(f"Saved {name} with a write lock.")
+        return True
+
+    def save_locked_editor_content(self, name, fd, content, original_content=""):
+        normalized = content.strip()
+        if "\n" in content or "\r" in content:
+            messagebox.showwarning(
+                "Save limitation",
+                "The backend write command accepts one line at a time. Remove line breaks before saving."
+            )
+            return False
+        if not normalized:
+            messagebox.showwarning("Save limitation", "The backend cannot truncate a file to empty from the GUI yet.")
+            return False
+        if len(normalized) < len(original_content):
+            messagebox.showwarning(
+                "Save limitation",
+                "The backend has no truncate command yet. Keep the saved text at least as long as the original content."
+            )
+            return False
+
+        self.execute_gui_command(f"seek {fd} 0", update_entry=True, record_operation=False)
+        write_output = self.execute_gui_command(f"write {fd} {normalized}", update_entry=True, record_operation=False)
+        if "Write" not in write_output:
+            self._show_backend_notice("Save File", write_output, action="write")
+            return False
+        self.execute_gui_command(f"close {fd}", update_entry=True, record_operation=False)
+        self.log(f"Saved {name} and released its write lock.")
         return True
 
     def execute_gui_command(self, cmd, update_entry=False, record_operation=True):

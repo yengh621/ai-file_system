@@ -136,6 +136,7 @@ struct file_lock {
     int lock_type;           /* 锁类型：读或写 */
     int owner_uid;           /* 锁所有者 UID */
     int read_count;          /* 读锁计数 */
+    int process_locked;      /* 是否持有跨进程 OS 锁 */
 };
 
 /* === 二、性能层创新：AI 自适应 I/O 优化 === */
@@ -285,6 +286,7 @@ int open(char *name, int mode);
 void close(int fd);
 int read(int fd, unsigned char *buf, int count);
 int write(int fd, unsigned char *buf, int count);
+int seek_file(int fd, unsigned long offset);
 void mkdir(char *name);
 void chdir(char *name);
 void dir(void);
@@ -297,6 +299,10 @@ int is_empty_directory(struct inode *ip);
 int lock_file(unsigned short ino, int lock_type);
 void unlock_file(unsigned short ino, int lock_type);
 void init_file_locks();
+int init_process_lock_manager(void);
+void close_process_lock_manager(void);
+int process_lock_inode(unsigned short ino, int lock_type);
+void process_unlock_inode(unsigned short ino, int lock_type);
 
 /* === KFS 热点文件缓存函数声明 === */
 void init_kfs();

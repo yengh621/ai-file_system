@@ -123,6 +123,7 @@ int main(void) {
     for (i = 0; i < NHINO; i++) inode[i] = NULL;
     for (i = 0; i < NOFILE; i++) u_ofile[i] = -1;
     init_file_locks();
+    init_process_lock_manager();
     load_vdisk();
     char cmd[64], arg1[256], arg2[256];
     while (1) {
@@ -179,6 +180,11 @@ int main(void) {
             scanf("%d", &fd);
             fgets(arg1, 1024, stdin);
             write(fd, (unsigned char*)arg1, strlen(arg1));
+        } else if (strcmp(cmd, "seek") == 0) {
+            int fd;
+            unsigned long offset;
+            scanf("%d %lu", &fd, &offset);
+            seek_file(fd, offset);
         } else if (strcmp(cmd, "mkdir") == 0) {
             scanf("%s", arg1);
             mkdir(arg1);
@@ -199,7 +205,11 @@ int main(void) {
         } else if (strcmp(cmd, "dir") == 0 || strcmp(cmd, "ls") == 0) {
             dir();
         } else if (strcmp(cmd, "exit") == 0) {
+            if (cur_uid != -1) {
+                logout();
+            }
             save_vdisk();
+            close_process_lock_manager();
             break;
         } else if (strcmp(cmd, "init_kfs") == 0) {
             init_kfs();
@@ -274,6 +284,7 @@ int main(void) {
             printf("  close <fd> - Close a file\n");
             printf("  read <fd> <count> - Read from file\n");
             printf("  write <fd> <data> - Write to file\n");
+            printf("  seek <fd> <offset> - Move file offset\n");
             printf("  mkdir <name> - Create a directory\n");
             printf("  rmdir <name> - Remove a directory\n");
             printf("  chmod <name> <mode> - Change file permissions\n");

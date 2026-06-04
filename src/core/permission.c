@@ -10,12 +10,14 @@ void init_file_locks(void) {
         file_locks[i].lock_type = LOCK_NONE;
         file_locks[i].owner_uid = -1;
         file_locks[i].read_count = 0;
+        file_locks[i].process_locked = 0;
     }
 }
 
 /* 加锁 */
 int lock_file(unsigned short ino, int lock_type) {
     int idx = -1;
+    int created_slot = 0;
     for (int i = 0; i < SYSOPENFILE; i++) {
         if (file_locks[i].ino == ino) {
             idx = i;
@@ -28,9 +30,11 @@ int lock_file(unsigned short ino, int lock_type) {
         for (int i = 0; i < SYSOPENFILE; i++) {
             if (file_locks[i].ino == 0) {
                 idx = i;
+                created_slot = 1;
                 file_locks[i].ino = ino;
                 file_locks[i].lock_type = LOCK_NONE;
                 file_locks[i].read_count = 0;
+                file_locks[i].process_locked = 0;
                 break;
             }
         }
@@ -44,25 +48,35 @@ int lock_file(unsigned short ino, int lock_type) {
     
     if (lock_type == LOCK_READ) {
         if (fl->lock_type == LOCK_WRITE) {
-            if (fl->owner_uid != cur_uid) {
-                printf("File is write-locked by another user.\n");
-                return -1;
+            printf("File is write-locked by this process.\n");
+            return -1;
+        }
+        if (fl->read_count == 0 && process_lock_inode(ino, LOCK_READ) != 0) {
+            if (created_slot) {
+                fl->ino = 0;
             }
+            return -1;
         }
         fl->read_count++;
         fl->lock_type = LOCK_READ;
         fl->owner_uid = cur_uid;
+        fl->process_locked = 1;
         return 0;
     } else if (lock_type == LOCK_WRITE) {
         if (fl->lock_type != LOCK_NONE) {
-            if (fl->owner_uid != cur_uid || (fl->lock_type == LOCK_READ && fl->read_count > 1)) {
-                printf("File is locked by another user.\n");
-                return -1;
+            printf("File is locked by this process.\n");
+            return -1;
+        }
+        if (process_lock_inode(ino, LOCK_WRITE) != 0) {
+            if (created_slot) {
+                fl->ino = 0;
             }
+            return -1;
         }
         fl->lock_type = LOCK_WRITE;
         fl->owner_uid = cur_uid;
         fl->read_count = 0;
+        fl->process_locked = 1;
         return 0;
     }
     return -1;
@@ -86,15 +100,23 @@ void unlock_file(unsigned short ino, int lock_type) {
         if (fl->read_count > 0) {
             fl->read_count--;
             if (fl->read_count == 0) {
+                if (fl->process_locked) {
+                    process_unlock_inode(ino, LOCK_READ);
+                }
                 fl->lock_type = LOCK_NONE;
                 fl->owner_uid = -1;
+                fl->process_locked = 0;
                 fl->ino = 0;
             }
         }
     } else if (lock_type == LOCK_WRITE) {
+        if (fl->process_locked) {
+            process_unlock_inode(ino, LOCK_WRITE);
+        }
         fl->lock_type = LOCK_NONE;
         fl->owner_uid = -1;
         fl->read_count = 0;
+        fl->process_locked = 0;
         fl->ino = 0;
     }
 }
@@ -171,11 +193,6 @@ int check_permission(struct inode *ip, int mode) {
 
 /* 检查是否是目录 */
 void grant(char *path, char *username, int writable) {
-    if (cur_uid != 0) {
-        printf("Permission denied. Only root can grant file access.\n");
-        return;
-    }
-
     int user_idx = find_user_index_by_name(username);
     if (user_idx < 0) {
         printf("Target user not found.\n");
@@ -185,6 +202,12 @@ void grant(char *path, char *username, int writable) {
     struct inode *ip = namei(path);
     if (ip == NULL) {
         printf("File not found.\n");
+        return;
+    }
+
+    if (cur_uid != 0 && ip->i_din.di_uid != cur_uid) {
+        printf("Permission denied. Only root or the file owner can grant file access.\n");
+        iput(ip);
         return;
     }
 

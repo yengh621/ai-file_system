@@ -3,7 +3,7 @@ CFLAGS=-Wall -Wextra -Iinclude
 TARGET=filesystem
 
 # Core object files
-CORE_OBJS=main.o disk.o inode.o block.o directory.o file.o user.o permission.o ai.o
+CORE_OBJS=main.o disk.o inode.o block.o directory.o file.o user.o permission.o process_lock.o ai.o
 
 # Innovations object files
 INNOVATIONS_OBJS=kfs.o io_optimizer.o security.o link.o file_ops.o

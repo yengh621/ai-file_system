@@ -360,3 +360,18 @@ int write(int fd, unsigned char *buf, int count) {
     printf("Write %d bytes.\n", total);
     return total;
 }
+
+int seek_file(int fd, unsigned long offset) {
+    if (cur_uid == -1) {
+        printf("Not logged in.\n");
+        return -1;
+    }
+    if (fd < 0 || fd >= NOFILE || u_ofile[fd] == -1) {
+        printf("Invalid fd.\n");
+        return -1;
+    }
+
+    sysopenfile[u_ofile[fd]].f_offset = offset;
+    printf("Seek successful, fd = %d, offset = %lu\n", fd, offset);
+    return 0;
+}

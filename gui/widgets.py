@@ -519,7 +519,7 @@ class FileTreeWidget:
 
         meta = self.item_meta.get(item_id, {})
         if meta.get("type") == "file" and self.on_file_double_click:
-            self.on_file_double_click(meta.get("name", ""))
+            self.on_file_double_click(meta)
         elif meta.get("type") == "dir" and self.on_dir_double_click:
             self.on_dir_double_click(meta)
 
