@@ -36,6 +36,7 @@ vdisk.bin
 *.obj
 *.lib
 *.a
+filesystem
 
 # IDE
 .vscode/

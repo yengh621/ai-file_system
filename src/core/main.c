@@ -278,13 +278,13 @@ int main(void) {
         } else if (strcmp(cmd, "link") == 0) {
             scanf("%s %s", arg1, arg2);
             link(arg1, arg2);
-        } else if (strcmp(cmd, "copy") == 0) {
+        } else if (strcmp(cmd, "copy") == 0 || strcmp(cmd, "cp") == 0) {
             scanf("%s %s", arg1, arg2);
             copy_file_command(arg1, arg2);
-        } else if (strcmp(cmd, "move") == 0) {
+        } else if (strcmp(cmd, "move") == 0 || strcmp(cmd, "mv") == 0) {
             scanf("%s %s", arg1, arg2);
             move_file_command(arg1, arg2);
-        } else if (strcmp(cmd, "rename") == 0) {
+        } else if (strcmp(cmd, "rename") == 0 || strcmp(cmd, "mv") == 0) {
             scanf("%s %s", arg1, arg2);
             rename_path_command(arg1, arg2);
         } else if (strcmp(cmd, "symlink") == 0) {

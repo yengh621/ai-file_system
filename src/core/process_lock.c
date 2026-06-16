@@ -9,12 +9,28 @@
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
+
+#define open __system_open
 #include <windows.h>
+#undef open
+
+#else
+
+#define open __system_open
+#include <fcntl.h>
+#undef open
+
 #endif
 
 #include "filesystem.h"
 
+<<<<<<< HEAD
 /* ==================== Windows 平台实现 ==================== */
+=======
+#include <string.h>
+#include <stdio.h>
+
+>>>>>>> ade09a44633cc71fce0a0f77f3318d47f95f1ba9
 #ifdef _WIN32
 
 /* 锁文件句柄 (Windows) */
