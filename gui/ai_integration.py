@@ -87,6 +87,27 @@ class AIIntegration:
         params = self._extract_parameters(self.recorder.learned_params)
         return params or self.recorder.get_current_params()
     
+    def rename_hot_file_path(self, old_path, new_path):
+        """Keep saved AI hot-file paths aligned with a filesystem rename."""
+        if self.current_uid == -1:
+            return False
+
+        self.recorder._load_all()
+        params = self._extract_parameters(self.recorder.learned_params)
+        hot_files = params.get("hot_files", []) if isinstance(params, dict) else []
+        changed = False
+
+        for item in hot_files:
+            if not isinstance(item, dict) or item.get("path") != old_path:
+                continue
+            item["path"] = new_path
+            item["filename"] = new_path.rstrip("/").rsplit("/", 1)[-1]
+            changed = True
+
+        if changed:
+            self.recorder._save_learned_params()
+        return changed
+
     def get_agent_calls(self):
         """获取智能体调用记录"""
         try:

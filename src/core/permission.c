@@ -1,5 +1,4 @@
 #include "filesystem.h"
-
 /* 文件锁数组 */
 struct file_lock file_locks[SYSOPENFILE];
 

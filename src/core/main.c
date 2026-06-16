@@ -157,6 +157,15 @@ int main(void) {
             else if (strcmp(arg2, "rw") == 0) mode = O_RDWR;
             else if (strcmp(arg2, "a") == 0) mode = O_APPEND;
             open(arg1, mode);
+        } else if (strcmp(cmd, "openino") == 0) {
+            int ino;
+            arg1[0] = '\0';
+            scanf("%d %s %255s", &ino, arg2, arg1);
+            int mode = O_RDONLY;
+            if (strcmp(arg2, "w") == 0) mode = O_WRONLY;
+            else if (strcmp(arg2, "rw") == 0) mode = O_RDWR;
+            else if (strcmp(arg2, "a") == 0) mode = O_APPEND;
+            open_inode((unsigned short)ino, mode, arg1);
         } else if (strcmp(cmd, "close") == 0) {
             int fd;
             scanf("%d", &fd);
@@ -168,7 +177,7 @@ int main(void) {
             int n = read(fd, buf, count);
             if (n > 0) {
                 buf[n] = '\0';
-                printf("Content:\n");
+                printf("Content: ");
                 for (int i = 0; i < n; i++) {
                     putchar(buf[i]);
                 }
@@ -178,13 +187,27 @@ int main(void) {
         } else if (strcmp(cmd, "write") == 0) {
             int fd;
             scanf("%d", &fd);
-            fgets(arg1, 1024, stdin);
-            write(fd, (unsigned char*)arg1, strlen(arg1));
+            if (fgets(arg1, sizeof(arg1), stdin) != NULL) {
+                char *data = arg1;
+                size_t len;
+
+                while (*data == ' ' || *data == '\t') data++;
+                len = strlen(data);
+                while (len > 0 && (data[len - 1] == '\n' || data[len - 1] == '\r')) {
+                    data[--len] = '\0';
+                }
+                write(fd, (unsigned char*)data, (int)len);
+            }
         } else if (strcmp(cmd, "seek") == 0) {
             int fd;
             unsigned long offset;
             scanf("%d %lu", &fd, &offset);
             seek_file(fd, offset);
+        } else if (strcmp(cmd, "truncate") == 0) {
+            int fd;
+            unsigned long size;
+            scanf("%d %lu", &fd, &size);
+            truncate_file(fd, size);
         } else if (strcmp(cmd, "mkdir") == 0) {
             scanf("%s", arg1);
             mkdir(arg1);
@@ -216,6 +239,10 @@ int main(void) {
         } else if (strcmp(cmd, "kfs_list") == 0) {
             scanf("%[^\n]", arg1);
             kfs_list_virtual_dir(arg1);
+        } else if (strcmp(cmd, "kfs_dir") == 0) {
+            int uid;
+            scanf("%d", &uid);
+            kfs_print_user_directory_entries(uid);
         } else if (strcmp(cmd, "kfs_tags") == 0) {
             int ino;
             scanf("%d", &ino);
@@ -285,6 +312,7 @@ int main(void) {
             printf("  read <fd> <count> - Read from file\n");
             printf("  write <fd> <data> - Write to file\n");
             printf("  seek <fd> <offset> - Move file offset\n");
+            printf("  truncate <fd> 0 - Truncate an open writable file to empty\n");
             printf("  mkdir <name> - Create a directory\n");
             printf("  rmdir <name> - Remove a directory\n");
             printf("  chmod <name> <mode> - Change file permissions\n");

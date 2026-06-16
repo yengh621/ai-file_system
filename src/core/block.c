@@ -1,21 +1,19 @@
 #include "filesystem.h"
-
+// 分配 inode
 int ialloc(void) {
     int ino;
     while (sb.s_ninode > 0) {
         struct dinode di;
-
         ino = sb.s_inode[--sb.s_ninode];
         if (ino < 1 || ino > DINODEBLK * (BLOCKSIZ / DINODESIZ)) {
             printf("Error: invalid inode %d from stack!\n", ino);
             continue;
         }
-
+//defend
         iget_inode(ino, &di);
         if (di.di_mode != 0) {
             continue;
         }
-
         sb.s_fmod = 1;
         return ino;
     }
@@ -29,7 +27,7 @@ int ialloc(void) {
     }
     return 0;
 }
-
+// 释放 inode
 void ifree(int ino) {
     if (sb.s_ninode < NICINOD) {
         sb.s_inode[sb.s_ninode++] = ino;
@@ -40,7 +38,7 @@ void ifree(int ino) {
     iput_inode(ino, &di);   // 直接写回清零的 dinode
     sb.s_fmod = 1;
 }
-
+// 分配块
 int balloc(void) {
     int blkno;
     if (sb.s_nfree > 1) {
@@ -62,7 +60,7 @@ int balloc(void) {
     }
     return 0;
 }
-
+// 释放块
 void bfree(int blkno) {
     if (sb.s_nfree < NICFREE) {
         sb.s_free[sb.s_nfree++] = blkno;
@@ -77,7 +75,7 @@ void bfree(int blkno) {
     }
     sb.s_fmod = 1;
 }
-
+// 映射逻辑块到物理块
 int bmap(struct inode *ip, int lbn) {
     int i, bn;
     unsigned short *addr = ip->i_din.di_addr;

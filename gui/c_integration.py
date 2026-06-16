@@ -33,10 +33,9 @@ class CSystemWrapper:
         self.reading = False
 
     def start(self):
-        """Start filesystem, building it first only when missing."""
+        """Start filesystem, rebuilding when sources are newer."""
         try:
-            # 自动判断是否存在可执行文件
-            if not os.path.exists(BIN_PATH):
+            if self._backend_needs_build():
                 subprocess.run(BUILD_CMD, shell=False, cwd=PROJECT_ROOT)
 
             # 跨平台启动命令
@@ -63,6 +62,24 @@ class CSystemWrapper:
         except Exception as exc:
             print(f"Failed to start C backend: {exc}")
             return False
+
+    def _backend_needs_build(self):
+        if not os.path.exists(BIN_PATH):
+            return True
+
+        binary_mtime = os.path.getmtime(BIN_PATH)
+        source_roots = (
+            os.path.join(PROJECT_ROOT, "src"),
+            os.path.join(PROJECT_ROOT, "include"),
+        )
+        for source_root in source_roots:
+            for root, _, files in os.walk(source_root):
+                for filename in files:
+                    if not filename.endswith((".c", ".h")):
+                        continue
+                    if os.path.getmtime(os.path.join(root, filename)) > binary_mtime:
+                        return True
+        return False
 
     def _read_output(self):
         """Block on stdout and push decoded chunks into the queue."""

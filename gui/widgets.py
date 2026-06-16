@@ -6,6 +6,7 @@
 """
 import tkinter as tk
 from tkinter import ttk
+import re
 from .styles import Colors, Fonts, Layout
 
 
@@ -128,8 +129,24 @@ class SpaceUsageWidget:
         self.percent_label = create_label(self.top_frame, "0%", font=Fonts.TITLE, fg=Colors.ACCENT)
         self.percent_label.pack(side=tk.RIGHT)
 
-        self.meta_label = create_label(self.frame, "Metadata: 0 inodes / 0 B", font=Fonts.SMALL, fg=Colors.FG_MUTED)
-        self.meta_label.pack(anchor="w", pady=(0, 8))
+        self.meta_frame = create_frame(self.frame)
+        self.meta_frame.pack(fill=tk.X, pady=(0, 8))
+
+        self.meta_label = create_label(
+            self.meta_frame,
+            "Metadata: 0 inodes / 0 B",
+            font=Fonts.SMALL,
+            fg=Colors.FG_MUTED,
+        )
+        self.meta_label.pack(side=tk.LEFT)
+
+        self.operation_time_label = create_label(
+            self.meta_frame,
+            "上一步操作用时: --",
+            font=Fonts.SMALL,
+            fg=Colors.PRIMARY_DARK,
+        )
+        self.operation_time_label.pack(side=tk.RIGHT)
 
         # 图例
         self.legend_frame = create_frame(self.frame)
@@ -231,6 +248,16 @@ class SpaceUsageWidget:
         self.percent_label.config(text="0%")
         self.meta_label.config(text="Metadata: 0 inodes / 0 B")
         self.draw_blocks()
+
+    def set_operation_time(self, elapsed_seconds):
+        """Display the latest user-visible backend operation duration."""
+        if elapsed_seconds < 0.001:
+            value = f"{elapsed_seconds * 1_000_000:.0f} μs"
+        elif elapsed_seconds < 1:
+            value = f"{elapsed_seconds * 1000:.2f} ms"
+        else:
+            value = f"{elapsed_seconds:.3f} s"
+        self.operation_time_label.config(text=f"上一步操作用时: {value}")
 
     def _format_size(self, size_bytes):
         """Format byte sizes without hiding small changes."""
@@ -567,6 +594,8 @@ class FileTreeWidget:
                     else:
                         name = rest.strip()
                     name = name.replace("[KFS]", "").strip()
+                    ino_match = re.search(r"\bino:\s*(\d+)", rest)
+                    uid_match = re.search(r"\buid:\s*(\d+)", rest)
                     
                     # 跳过空名称和 . ..
                     if not name or name == '.' or name == '..':
@@ -594,7 +623,12 @@ class FileTreeWidget:
                     # 添加到树
                     item_id = self.tree.insert(self.root_node, "end", text=display_name)
                     item_path = self.current_path.rstrip("/") + "/" + name if self.current_path != "/" else "/" + name
-                    self.item_meta[item_id] = {"name": name, "type": item_type, "path": item_path}
+                    meta = {"name": name, "type": item_type, "path": item_path}
+                    if ino_match and "[KFS]" in rest:
+                        meta["kfs_ino"] = int(ino_match.group(1))
+                    if uid_match and "[KFS-USER]" in rest:
+                        meta["kfs_uid"] = int(uid_match.group(1))
+                    self.item_meta[item_id] = meta
 
     def clear(self):
         """清空树"""

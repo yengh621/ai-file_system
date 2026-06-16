@@ -2,7 +2,7 @@
 
 struct filsys sb;
 unsigned char block_buf[BLOCKSIZ];
-
+// 读取磁盘块
 void bread(int blkno, unsigned char *buf) {
     FILE *fp = fopen("vdisk.bin", "rb");
     if (fp == NULL) return;
@@ -10,7 +10,7 @@ void bread(int blkno, unsigned char *buf) {
     fread(buf, BLOCKSIZ, 1, fp);
     fclose(fp);
 }
-
+// 写入磁盘块
 void bwrite(int blkno, unsigned char *buf) {
     FILE *fp = fopen("vdisk.bin", "rb+");
     if (fp == NULL) fp = fopen("vdisk.bin", "wb");

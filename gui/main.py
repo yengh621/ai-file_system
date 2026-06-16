@@ -10,6 +10,7 @@ import json
 import os
 import threading
 import posixpath
+import time
 
 from .styles import Colors, Fonts, Layout, Filesystem
 from .widgets import (
@@ -44,6 +45,7 @@ class FileSystemGUI:
         self.security_check_in_progress = False
         self.current_path = "/"
         self.home_path = "/"
+        self.current_kfs_uid = None
         self.clipboard = None
 
         self.setup_ui()
@@ -94,6 +96,13 @@ class FileSystemGUI:
         create_button(btn_frame2, "🔬 智能分析", self.run_analysis, style="accent").pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
 
         # 文件树可视化区域
+        self.format_btn = create_button(
+            btn_frame2,
+            "格式化磁盘",
+            self.format_disk,
+            style="secondary",
+        )
+
         self.file_tree_widget = FileTreeWidget(
             cmd_frame,
             on_context_menu=self.show_file_tree_menu,
@@ -259,7 +268,7 @@ class FileSystemGUI:
         if not name:
             return
 
-        result = self.read_file_with_existing_commands(name)
+        result = self.read_file_with_existing_commands(meta)
         if not result["ok"]:
             self._show_backend_notice("Open Read-only", result["open_output"], action="read")
             return
@@ -285,17 +294,33 @@ class FileSystemGUI:
 
         btn_frame = create_frame(dialog)
         btn_frame.pack(fill=tk.X, padx=16, pady=(0, 16))
-        create_button(btn_frame, "Edit with write lock", lambda: (dialog.destroy(), self.show_file_editor(meta)), style="accent").pack(side=tk.RIGHT)
+        if not (isinstance(meta, dict) and meta.get("kfs_ino") is not None):
+            create_button(
+                btn_frame,
+                "Edit with write lock",
+                lambda: (dialog.destroy(), self.show_file_editor(meta)),
+                style="accent",
+            ).pack(side=tk.RIGHT)
         create_button(btn_frame, "Close", dialog.destroy, style="secondary").pack(side=tk.RIGHT, padx=(8, 0))
         self.log(f"Opened {name} in read-only mode.")
 
     def show_file_editor(self, meta):
         """Open a modal editor for file content."""
+        if isinstance(meta, dict) and meta.get("kfs_ino") is not None:
+            messagebox.showwarning(
+                "KFS Read-only",
+                "KFS virtual files are read-only. Edit the original file instead.",
+            )
+            return
         name = self._file_name_from_meta(meta)
         if not name:
             return
 
-        open_output = self.execute_gui_command(f"open {name} rw", update_entry=True, record_operation=False)
+        open_output = self.execute_gui_command(
+            self._open_command_for_target(meta, "rw"),
+            update_entry=True,
+            record_operation=False,
+        )
         fd = self._extract_fd(open_output)
         if fd is None:
             self._show_backend_notice("Open Editor", open_output, action="write")
@@ -352,7 +377,46 @@ class FileSystemGUI:
         if not self.logged_in:
             self.clear_logged_out_display()
             return
+        if self.current_path.startswith("/kfs/") and self.current_kfs_uid is not None:
+            output = self.execute_gui_command(
+                f"kfs_dir {self.current_kfs_uid}",
+                update_entry=False,
+                record_operation=False,
+            )
+            self.file_tree_widget.update_tree(
+                output,
+                current_path=self.current_path,
+                allow_parent=True,
+            )
+            return
         self.execute_gui_command("dir", update_entry=False)
+
+    def format_disk(self):
+        """Format the virtual disk after explicit root confirmation."""
+        if not self.logged_in or self.current_uid != 0:
+            messagebox.showwarning("格式化磁盘", "只有 root 用户可以格式化磁盘。")
+            return
+
+        confirmed = messagebox.askyesno(
+            "格式化磁盘",
+            "格式化会永久删除虚拟磁盘中的所有文件和目录。\n\n确定要继续吗？",
+            icon="warning",
+            parent=self.root,
+        )
+        if not confirmed:
+            return
+
+        output = self.execute_gui_command("format", update_entry=True)
+        if "Format completed." not in output:
+            messagebox.showerror("格式化磁盘", output or "格式化失败。", parent=self.root)
+            return
+
+        self.clipboard = None
+        self.home_path = "/"
+        self.current_path = "/usr"
+        self.navigate_to_path(self.current_path, record_operation=False)
+        self.log("虚拟磁盘格式化完成")
+        messagebox.showinfo("格式化磁盘", "虚拟磁盘已格式化。", parent=self.root)
 
     def clear_logged_out_display(self):
         """Hide session-specific disk and file information after logout."""
@@ -365,9 +429,13 @@ class FileSystemGUI:
         menu = tk.Menu(self.root, tearoff=0)
         item_type = meta.get("type", "dir")
         is_parent = meta.get("is_parent", False)
+        is_kfs_view = self.current_path == "/kfs" or self.current_path.startswith("/kfs/")
 
         if item_type == "file":
             menu.add_command(label="View Read-only", command=lambda: self.show_file_viewer(meta))
+            if is_kfs_view:
+                menu.tk_popup(event.x_root, event.y_root)
+                return
             menu.add_command(label="Edit File", command=lambda: self.show_file_editor(meta))
             menu.add_command(label="Copy File", command=lambda: self.copy_file_from_tree(meta))
             menu.add_command(label="Cut File", command=lambda: self.cut_file_from_tree(meta))
@@ -377,6 +445,9 @@ class FileSystemGUI:
                 menu.add_command(label="Grant To User", command=lambda: self.grant_file_to_user(meta))
             menu.add_command(label="Delete File", command=lambda: self.delete_file_from_tree(meta))
         else:
+            if is_kfs_view:
+                menu.tk_popup(event.x_root, event.y_root)
+                return
             menu.add_command(label="New File", command=self.create_file_from_tree)
             menu.add_command(label="New Directory", command=self.create_directory_from_tree)
             if self.clipboard:
@@ -448,6 +519,8 @@ class FileSystemGUI:
         parent_path = old_path.rsplit("/", 1)[0] or "/"
         target_path = posixpath.join(parent_path, new_name)
         output = self.execute_gui_command(f"rename {old_path} {target_path}", update_entry=True, record_operation=False)
+        if "Rename successful:" in output:
+            ai_integration.rename_hot_file_path(old_path, target_path)
         self.content_viewer.set_content(output)
         self.refresh_directory_tree()
 
@@ -550,6 +623,21 @@ class FileSystemGUI:
 
     def open_directory_from_tree(self, meta):
         """Navigate into a directory from the tree."""
+        if self.current_path.rstrip("/") == "/kfs" and meta.get("kfs_uid") is not None:
+            self.current_kfs_uid = meta["kfs_uid"]
+            self.current_path = f"/kfs/{meta.get('name')}"
+            output = self.execute_gui_command(
+                f"kfs_dir {meta['kfs_uid']}",
+                update_entry=True,
+                record_operation=False,
+            )
+            self.file_tree_widget.update_tree(
+                output,
+                current_path=self.current_path,
+                allow_parent=True,
+            )
+            return
+
         target_path = meta.get("path", self.current_path)
         if target_path:
             output = self.navigate_to_path(target_path)
@@ -575,6 +663,17 @@ class FileSystemGUI:
     def navigate_to_path(self, path, record_operation=True):
         """Navigate to a directory and refresh the tree when successful."""
         path = path or self.current_path
+        if path == "/kfs":
+            self.current_kfs_uid = None
+            output = self.execute_gui_command(
+                "chdir /kfs",
+                update_entry=True,
+                record_operation=record_operation,
+            )
+            if "Chdir successful" in output:
+                self.current_path = "/kfs"
+                self.refresh_directory_tree()
+            return output
         output = self.execute_gui_command(f"chdir {path}", update_entry=True, record_operation=record_operation)
         if "Chdir successful" in output:
             self.current_path = path
@@ -595,8 +694,17 @@ class FileSystemGUI:
             return ""
         return output.split(marker, 1)[1].split("\n$ ", 1)[0].strip()
 
+    def _open_command_for_target(self, target, mode):
+        if isinstance(target, dict) and target.get("kfs_ino") is not None:
+            return f"openino {target['kfs_ino']} {mode} {target.get('name', '')}"
+        return f"open {self._file_name_from_meta(target)} {mode}"
+
     def read_file_with_existing_commands(self, name, update_entry=True, record_operation=True):
-        open_output = self.execute_gui_command(f"open {name} r", update_entry=update_entry, record_operation=record_operation)
+        open_output = self.execute_gui_command(
+            self._open_command_for_target(name, "r"),
+            update_entry=update_entry,
+            record_operation=record_operation,
+        )
         fd = self._extract_fd(open_output)
         if fd is None:
             return {"ok": False, "content": "", "open_output": open_output, "read_output": ""}
@@ -655,26 +763,6 @@ class FileSystemGUI:
         self.show_file_viewer(selected)
         return f"Opened {selected}"
 
-    def save_file_with_existing_commands(self, name, content):
-        normalized = content.strip()
-        if any(ch.isspace() for ch in normalized):
-            messagebox.showwarning(
-                "保存受限",
-                "当前后端 write 命令只支持不含空格和换行的一段内容，请去掉空白字符后再保存。"
-            )
-            return False
-
-        self.execute_gui_command(f"delete {name}", update_entry=True)
-        self.execute_gui_command(f"create {name}", update_entry=True)
-        if normalized:
-            open_output = self.execute_gui_command(f"open {name} w", update_entry=True)
-            fd = self._extract_fd(open_output)
-            if fd is None:
-                return False
-            self.execute_gui_command(f"write {fd} {normalized}", update_entry=True)
-            self.execute_gui_command(f"close {fd}", update_entry=True)
-        return True
-
     def save_file_with_existing_commands(self, name, content, original_content=""):
         normalized = content.strip()
         if "\n" in content or "\r" in content:
@@ -683,23 +771,20 @@ class FileSystemGUI:
                 "The backend write command accepts one line at a time. Remove line breaks before saving."
             )
             return False
-        if not normalized:
-            messagebox.showwarning("Save limitation", "The backend cannot truncate a file to empty from the GUI yet.")
-            return False
-        if len(normalized) < len(original_content):
-            messagebox.showwarning(
-                "Save limitation",
-                "The backend has no truncate command yet. Keep the saved text at least as long as the original content."
-            )
-            return False
-
         open_output = self.execute_gui_command(f"open {name} w", update_entry=True)
         fd = self._extract_fd(open_output)
         if fd is None:
             self._show_backend_notice("Save File", open_output, action="write")
             return False
 
-        write_output = self.execute_gui_command(f"write {fd} {normalized}", update_entry=True)
+        truncate_output = self.execute_gui_command(f"truncate {fd} 0", update_entry=True)
+        if "Truncate successful" not in truncate_output:
+            self.execute_gui_command(f"close {fd}", update_entry=True)
+            self._show_backend_notice("Save File", truncate_output, action="write")
+            return False
+        write_output = "Write 0 bytes."
+        if normalized:
+            write_output = self.execute_gui_command(f"write {fd} {normalized}", update_entry=True)
         self.execute_gui_command(f"close {fd}", update_entry=True)
         if "Write" not in write_output:
             self._show_backend_notice("Save File", write_output, action="write")
@@ -715,18 +800,21 @@ class FileSystemGUI:
                 "The backend write command accepts one line at a time. Remove line breaks before saving."
             )
             return False
-        if not normalized:
-            messagebox.showwarning("Save limitation", "The backend cannot truncate a file to empty from the GUI yet.")
+        truncate_output = self.execute_gui_command(
+            f"truncate {fd} 0",
+            update_entry=True,
+            record_operation=False,
+        )
+        if "Truncate successful" not in truncate_output:
+            self._show_backend_notice("Save File", truncate_output, action="write")
             return False
-        if len(normalized) < len(original_content):
-            messagebox.showwarning(
-                "Save limitation",
-                "The backend has no truncate command yet. Keep the saved text at least as long as the original content."
+        write_output = "Write 0 bytes."
+        if normalized:
+            write_output = self.execute_gui_command(
+                f"write {fd} {normalized}",
+                update_entry=True,
+                record_operation=False,
             )
-            return False
-
-        self.execute_gui_command(f"seek {fd} 0", update_entry=True, record_operation=False)
-        write_output = self.execute_gui_command(f"write {fd} {normalized}", update_entry=True, record_operation=False)
         if "Write" not in write_output:
             self._show_backend_notice("Save File", write_output, action="write")
             return False
@@ -734,11 +822,40 @@ class FileSystemGUI:
         self.log(f"Saved {name} and released its write lock.")
         return True
 
+    def execute_backend_command(self, cmd):
+        """Execute one backend command and publish its round-trip duration."""
+        started_at = time.perf_counter()
+        try:
+            return self.client.execute(cmd)
+        finally:
+            self.space_widget.set_operation_time(time.perf_counter() - started_at)
+
+    def execute_backend_login(self, username, password):
+        """Run the interactive login flow and publish its duration."""
+        started_at = time.perf_counter()
+        try:
+            return self.client.login(username, password)
+        finally:
+            self.space_widget.set_operation_time(time.perf_counter() - started_at)
+
+    def execute_backend_logout(self):
+        """Log out and publish the backend round-trip duration."""
+        started_at = time.perf_counter()
+        try:
+            return self.client.logout()
+        finally:
+            self.space_widget.set_operation_time(time.perf_counter() - started_at)
+
     def execute_gui_command(self, cmd, update_entry=False, record_operation=True):
         """Execute an existing backend command and record it in the normal memory flow."""
         cmd = cmd.strip()
         if not cmd:
             return ""
+        if self._is_kfs_mutation(cmd):
+            message = "KFS virtual files are read-only. Edit the original file instead."
+            self.content_viewer.set_content(message)
+            self.log(message)
+            return message
 
         if update_entry:
             self.cmd_entry.delete(0, tk.END)
@@ -747,7 +864,7 @@ class FileSystemGUI:
         output = ""
         self.log(f"$ {cmd}")
         try:
-            output = self.client.execute(cmd)
+            output = self.execute_backend_command(cmd)
 
             if cmd.startswith("chdir ") and "Chdir successful" in output:
                 self.current_path = cmd.split(" ", 1)[1].strip()
@@ -811,16 +928,15 @@ class FileSystemGUI:
     def _sync_kfs_hot_files_to_kernel(self, params):
         """Push AI-selected hot files into the C kernel KFS area."""
         hot_files = params.get("hot_files", []) if isinstance(params, dict) else []
-        if not hot_files:
-            self.log("KFS 暂无 AI 选择的热点文件，未写入内核 KFS")
-            return
 
         try:
-            output = self.client.execute("kfs_ai_select")
+            output = self.execute_backend_command("kfs_ai_select")
             if output:
                 for line in output.strip().splitlines():
                     self.log(line)
             self.log(f"KFS 已同步 {len(hot_files)} 个热点文件到内核")
+            if self.current_path == "/kfs" or self.current_path.startswith("/kfs/"):
+                self.refresh_directory_tree()
         except Exception as e:
             self.log(f"KFS 热点文件同步失败: {e}")
 
@@ -927,10 +1043,22 @@ class FileSystemGUI:
         cmd = self.cmd_entry.get().strip()
         if not cmd:
             return
+        if self._is_kfs_mutation(cmd):
+            messagebox.showwarning(
+                "KFS Read-only",
+                "KFS virtual files are read-only. Edit the original file instead.",
+            )
+            return
+        if cmd == "login":
+            self.show_login_dialog()
+            return
+        if cmd == "logout":
+            self.do_logout()
+            return
 
         self.log(f"$ {cmd}")
         try:
-            output = self.client.execute(cmd)
+            output = self.execute_backend_command(cmd)
 
             if cmd.startswith("chdir ") and "Chdir successful" in output:
                 self.current_path = cmd.split(" ", 1)[1].strip()
@@ -945,7 +1073,7 @@ class FileSystemGUI:
 
             self.log("✅ 命令执行完成")
 
-            if cmd.startswith("login"):
+            if cmd == "login":
                 self.logged_in = True
                 self.user_label.config(text="已登录")
                 self.login_btn.config(text="登出", command=self.do_logout)
@@ -960,7 +1088,7 @@ class FileSystemGUI:
                 self.start_security_monitor()
                 self.show_security_alerts_if_needed()
 
-            elif cmd.startswith("logout"):
+            elif cmd == "logout":
                 self.logged_in = False
                 self.user_label.config(text="未登录")
                 self.login_btn.config(text="登录", command=self.show_login_dialog)
@@ -984,6 +1112,18 @@ class FileSystemGUI:
             self.log(f"⚠️ 命令已发送")
 
         self.finish_operation()
+
+    def _is_kfs_mutation(self, cmd):
+        if not (self.current_path == "/kfs" or self.current_path.startswith("/kfs/")):
+            return False
+        operation = cmd.split(None, 1)[0].lower() if cmd else ""
+        if operation == "openino":
+            parts = cmd.lower().split()
+            return len(parts) >= 3 and parts[2] != "r"
+        return operation in {
+            "create", "delete", "write", "mkdir", "rmdir", "chmod",
+            "grant", "rename", "copy", "move", "link", "symlink", "truncate",
+        }
 
     def run_analysis(self):
         self.run_analysis_async(show_cached=True)
@@ -1132,7 +1272,7 @@ class FileSystemGUI:
     def _do_login(self, username, password, dialog):
         """执行登录 - 调用后端验证"""
         try:
-            output = self.client.login(username, password)
+            output = self.execute_backend_login(username, password)
             print(f"[DEBUG] 登录输出: {repr(output)}")
 
             if "Login successful" not in output and "login ok" not in output.lower():
@@ -1154,6 +1294,11 @@ class FileSystemGUI:
             dialog.destroy()
 
             self.current_uid = self.uid_for_username(username)
+            self.current_kfs_uid = None
+            if self.current_uid == 0:
+                self.format_btn.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
+            else:
+                self.format_btn.pack_forget()
             self.setup_user_paths(username)
             ai_integration.set_user(self.current_uid)
             self.init_orchestrator()
@@ -1178,13 +1323,15 @@ class FileSystemGUI:
         """执行登出"""
         self.stop_auto_analysis()
         self.stop_security_monitor()
+        self.format_btn.pack_forget()
         self.current_uid = -1
+        self.current_kfs_uid = None
         self.current_path = "/"
         self.home_path = "/"
         ai_integration.clear_user()
 
         try:
-            output = self.client.logout()
+            output = self.execute_backend_logout()
             if output:
                 self.content_viewer.set_content(output)
         except Exception:

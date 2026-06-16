@@ -182,6 +182,7 @@ struct hot_file_entry {
     int stored_in_kfs;         /* 是否已存储在 KFS 磁盘 */
     int kfs_data_start_blk;    /* KFS 数据起始块 */
     int kfs_data_blk_count;    /* KFS 数据块数 */
+    unsigned int selected_user_mask; /* Users whose AI selected this inode */
 };
 
 /* KFS 磁盘头部结构 */
@@ -283,10 +284,12 @@ int find_user_index_by_name(char *name);
 void create(char *name);
 void delete(char *name);
 int open(char *name, int mode);
+int open_inode(unsigned short ino, int mode, const char *display_name);
 void close(int fd);
 int read(int fd, unsigned char *buf, int count);
 int write(int fd, unsigned char *buf, int count);
 int seek_file(int fd, unsigned long offset);
+int truncate_file(int fd, unsigned long size);
 void mkdir(char *name);
 void chdir(char *name);
 void dir(void);
@@ -321,14 +324,18 @@ void kfs_load_hot_files_from_ai();
 /* KFS 热点文件存储 */
 int kfs_store_hot_file(char *filename, unsigned short ino);
 int kfs_read_hot_file(char *filename, unsigned char *buf);
-int kfs_read_hot_file_block(char *filename, int block_index, unsigned char *buf);
+int kfs_read_hot_file_block(char *filename, unsigned short ino, int block_index, unsigned char *buf);
 int kfs_is_file_hot(char *filename);
 void kfs_remove_file(char *filename, unsigned short ino);
+void kfs_invalidate_file(char *filename, unsigned short ino);
+void kfs_rename_file(unsigned short ino, char *new_name);
+void kfs_reset_runtime_cache(void);
 
 /* KFS 内存内容文件 */
 void kfs_update_memory_map();
 void kfs_show_memory_map();
 void kfs_print_directory_entries();
+void kfs_print_user_directory_entries(int uid);
 
 /* KFS 导出给 AI */
 void export_kfs_stats_to_ai();

@@ -117,6 +117,7 @@ void format(void) {
     int i, j;
     clear_inode_cache();
     reset_open_file_state();
+    kfs_reset_runtime_cache();
     cur_dir = 1;
 
     memset(block_buf, 0, BLOCKSIZ);

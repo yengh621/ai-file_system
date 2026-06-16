@@ -85,10 +85,11 @@ void integration_record_operation(char *operation, char *path) {
     
     char cmd[512];
     if (path) {
-            snprintf(cmd, sizeof(cmd), "python -m ai.cli record %s \"%s\" 2>&1", 
-                     operation, path);
+            snprintf(cmd, sizeof(cmd), "python -m ai.cli record_for_user %d %s \"%s\" 2>&1",
+                     cur_uid, operation, path);
         } else {
-            snprintf(cmd, sizeof(cmd), "python -m ai.cli record %s 2>&1", operation);
+            snprintf(cmd, sizeof(cmd), "python -m ai.cli record_for_user %d %s 2>&1",
+                     cur_uid, operation);
         }
     
     FILE *pipe = popen(cmd, "r");

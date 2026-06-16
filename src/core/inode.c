@@ -1,14 +1,14 @@
 #include "filesystem.h"
 
 struct inode *inode[NHINO];
-
+// 从磁盘读取inode
 void iget_inode(int ino, struct dinode *di) {
     int blkno = DINODESTART + (ino - 1) / (BLOCKSIZ / DINODESIZ);
     int offset = ((ino - 1) % (BLOCKSIZ / DINODESIZ)) * DINODESIZ;
     bread(blkno, block_buf);
     memcpy(di, block_buf + offset, DINODESIZ);
 }
-
+// 写入inode到磁盘
 void iput_inode(int ino, struct dinode *di) {
     int blkno = DINODESTART + (ino - 1) / (BLOCKSIZ / DINODESIZ);
     int offset = ((ino - 1) % (BLOCKSIZ / DINODESIZ)) * DINODESIZ;
@@ -16,8 +16,8 @@ void iput_inode(int ino, struct dinode *di) {
     memcpy(block_buf + offset, di, DINODESIZ);
     bwrite(blkno, block_buf);
 }
-
-struct inode* iget(int ino) {
+// 获取inode
+   struct inode* iget(int ino) {
     int hash = ino % NHINO;
     struct inode *p = inode[hash];
     while (p != NULL) {
@@ -39,7 +39,7 @@ struct inode* iget(int ino) {
     inode[hash] = p;
     return p;
 }
-
+// 写入inode到磁盘
 void iput(struct inode *p) {
     if (p == NULL) return;
     p->i_count--;

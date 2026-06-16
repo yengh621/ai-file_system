@@ -112,7 +112,7 @@ search_start:
         ip = next_ip;
     }
 }
-
+// 打印当前目录
 void dir(void) {
     if (cur_uid == -1) {
         printf("Not logged in.\n");
@@ -123,6 +123,24 @@ void dir(void) {
         printf("Directory not found.\n");
         return;
     }
+
+    /*
+     * /kfs is a virtual view of files materialized in the system KFS area.
+     * Its backing directory entries are implementation details and must not
+     * be mixed into the user-visible hotspot list.
+     */
+    struct inode *kfs_ip = namei("/kfs");
+    if (kfs_ip != NULL) {
+        int is_kfs_dir = (kfs_ip->i_ino == cur_dir);
+        iput(kfs_ip);
+        if (is_kfs_dir) {
+            printf("Directory contents:\n");
+            kfs_print_directory_entries();
+            iput(ip);
+            return;
+        }
+    }
+
     unsigned long filesize = ip->i_din.di_size;
     struct direct dir;
     int i;
@@ -158,15 +176,6 @@ void dir(void) {
             } else {
                 printf("- %s (ino: %d)\n", dir.d_name, dir.d_ino);
             }
-        }
-    }
-
-    struct inode *kfs_ip = namei("/kfs");
-    if (kfs_ip != NULL) {
-        int is_kfs_dir = (kfs_ip->i_ino == cur_dir);
-        iput(kfs_ip);
-        if (is_kfs_dir) {
-            kfs_print_directory_entries();
         }
     }
 

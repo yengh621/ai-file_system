@@ -21,6 +21,7 @@ Commands:
   set_user <uid>
   clear_user
   record <operation> [path]
+  record_for_user <uid> <operation> [path]
   analyze
   get_optimization
   get_last_analysis
@@ -45,6 +46,14 @@ Commands:
         elif command == "record" and len(sys.argv) > 2:
             operation = sys.argv[2]
             path = sys.argv[3] if len(sys.argv) > 3 else None
+            result = orchestrator.record_operation(operation, path)
+            print(json.dumps(result, ensure_ascii=False))
+
+        elif command == "record_for_user" and len(sys.argv) > 3:
+            uid = int(sys.argv[2])
+            operation = sys.argv[3]
+            path = sys.argv[4] if len(sys.argv) > 4 else None
+            orchestrator.set_user(uid)
             result = orchestrator.record_operation(operation, path)
             print(json.dumps(result, ensure_ascii=False))
         

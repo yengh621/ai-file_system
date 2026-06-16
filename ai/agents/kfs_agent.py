@@ -140,7 +140,10 @@ class KFSAgent(BaseAgent):
         for item in hot_files:
             if not isinstance(item, dict):
                 continue
-            filename = item.get("filename") or item.get("name") or item.get("path")
+            path = item.get("path")
+            filename = item.get("filename") or item.get("name")
+            if not filename and path:
+                filename = str(path).rstrip("/").rsplit("/", 1)[-1]
             if not filename:
                 continue
 
@@ -150,14 +153,19 @@ class KFSAgent(BaseAgent):
                 ino = 0
             if ino <= 0:
                 ino = ino_by_name.get(str(filename), 0)
-            if ino <= 0:
+            if ino <= 0 and not path:
                 continue
 
-            key = (str(filename), ino)
+            key = (str(path or filename), ino)
             if key in seen:
                 continue
             seen.add(key)
-            normalized.append({"filename": str(filename), "ino": ino})
+            entry = {"filename": str(filename)}
+            if path:
+                entry["path"] = str(path)
+            if ino > 0:
+                entry["ino"] = ino
+            normalized.append(entry)
 
         return normalized
     
